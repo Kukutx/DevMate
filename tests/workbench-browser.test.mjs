@@ -195,6 +195,8 @@ test('real Workbench in isolated Chromium: explicit scope, files, native approva
   // Another tab does not cost the unsaved draft, and no browser dialog is involved.
   f.approvals.push(delegationRequest(),{...delegationRequest(),id:'approval-waits',deliveryId:'delivery-002',summary:DELEGATION_WAITS,waits:WAITS_FOR});
   await page.getByRole('tab',{name:'Approvals',exact:true}).click();
+  // (The page is drawn once its lists have come: counted before that, there is nothing yet.)
+  await page.getByRole('button',{name:'Allow once from provider',exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Cancel turn',exact:true}).count(),1,'a task that waits to be allowed has no turn to cancel: only the agent\'s own request offers that');
   await page.getByRole('button',{name:'Allow once from provider',exact:true}).click();
   await page.waitForFunction(()=>[...document.querySelectorAll('.badge')].some(x=>x.textContent==='resolved'));
