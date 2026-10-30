@@ -5,6 +5,10 @@ import { hasWords, id, keywords, mutation, ownerCommand, projectScope } from './
 
 // Domain capabilities: the built-in engines (browser control and QA, Godot, reverse
 // engineering, Obsidian) and the owner's configured external MCP servers.
+// Who asks the browser, for which of the browsers' ids they hold: the owner at this computer, or a client by the way
+// it came and the name it gave (see the answered browsers in ../chrome.mjs).
+const browserCaller = context => context?.surface === 'local' ? 'local' : 'connected ' + (context?.via || '') + ' ' + String(context?.client || '');
+
 export function defineCapabilityOperations(service, add) {
   const engine = z.string().max(80);
   // The owner's browser belongs to no project: its capabilities (chrome.*) are answered whichever projects are shared,
@@ -25,13 +29,13 @@ export function defineCapabilityOperations(service, add) {
     }, { withoutProject: listsBrowser });
   add('capability.call', { ...projectScope, capability: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()).default({}), ...mutation }, false,
     'Invoke one capability by the name capability_list gave it, with the input its schema describes (capability_list {name} returns that schema). The result is the capability\'s own. For a capability marked readOnly use capability_query.', (args, context) =>
-      ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context) })
+      ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), caller: browserCaller(context) })
         : service.capabilities.call(args, { signal: service.waitSignal(context), ownerDecides: service.ownerDecides(context) }),
     { destructive: true, openWorld: true, withoutProject: ofBrowser });
   // The same call for what only reads. A client that asks its user before every change has nothing to ask here.
   add('capability.query', { ...projectScope, capability: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()).default({}) }, true,
     'Invoke a read-only capability (readOnly:true in capability_list; also a dryRun capability with its dry run on): status, inspection, search, snapshots. It never changes anything; everything else goes through capability_call.', (args, context) =>
-      ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), readOnly: true })
+      ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), readOnly: true, caller: browserCaller(context) })
         : service.capabilities.call(args, { signal: service.waitSignal(context), readOnly: true }),
     { openWorld: true, withoutProject: ofBrowser });
   // Without a project these act on the whole runtime, so the project is optional and not filled in.

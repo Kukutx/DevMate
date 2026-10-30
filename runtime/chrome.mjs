@@ -126,6 +126,8 @@ const PAUSED = 'The owner has paused DevMate\'s use of this browser, in the DevM
 // belongs to a browser that is gone: closed, or ended before its host could say so. A host that was handed work and
 // has not asked again within UNHEARD_MS has, as far as can be told, not received it.
 const IDLE_MS = 5000, UNHEARD_MS = 1500, CALL_TIMEOUT_MS = 30000;
+// How many callers the browser that answered them last is kept for.
+const CALLERS_KEPT = 64;
 // The inputs that name something by an id one browser gave it, or by a place in what one browser recorded.
 const OWN = ['tabId', 'tabIds', 'windowId', 'groupId', 'id', 'folderId', 'parentId', 'sessionId', 'requestId', 'ref', 'since'];
 
@@ -137,7 +139,11 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   // The browser that answered a call last. The ids a model knows (tab 57, bookmark 12) are that browser's: a call that
   // names one is not handed to another browser that is used since (the owner paused that one or chose another, or one
   // came or went), where the same id is something else.
-  let answered = null;
+  // It is kept for each caller (the way a client came and the name it gave, or the owner at this computer): the ids
+  // one client holds are those of the browser that answered it, not of the one that answered another client since.
+  const answered = new Map();
+  const answeredBy = caller => answered.get(caller) ?? null;
+  const noteAnswer = (caller, link) => { answered.delete(caller); answered.set(caller, link); if (answered.size > CALLERS_KEPT) answered.delete(answered.keys().next().value); };
   // A look that is made after whatever arrived meanwhile was read: a runtime that was busy for a moment does not take
   // a host that was waiting all along for gone.
   const later = (ms, look) => { const timer = setTimeout(() => setImmediate(look), ms); timer.unref?.(); return timer; };
@@ -301,7 +307,7 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     const link = owned(linkId), call = link.pending.get(id);
     if (!call) return { accepted: false };
     link.pending.delete(id); link.handed.delete(id); clearTimeout(call.timer);
-    if (ok === true) { answered = link; call.resolve(value); }
+    if (ok === true) { noteAnswer(call.caller, link); call.resolve(value); }
     else if (error?.code === 'paused') call.reject(fault('paused', PAUSED, { notStarted: true }));
     else call.reject(fault(ERROR_CODES.has(error?.code) ? error.code : 'browser_error', String(error?.message || 'The browser could not do this.').slice(0, 1000)));
     return { accepted: true };
@@ -322,7 +328,7 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   }
 
   /** One capability of the browser: chrome.<method> with its input. readOnly: the caller asked for something that only reads. */
-  async function call({ capability, input = {} } = {}, { readOnly = false, signal } = {}) {
+  async function call({ capability, input = {} } = {}, { readOnly = false, signal, caller = '' } = {}) {
     const refuse = (code, message) => fault(code, message, { notStarted: true });
     const definition = BY_NAME.get(capability);
     if (!definition) throw refuse('unknown_capability', 'Unknown browser capability: ' + capability + '. capability_list {engine:"chrome"} shows them.');
@@ -336,7 +342,8 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     if (!link) throw refuse('browser_unavailable', 'No browser is connected to DevMate. ' + HOW_TO_CONNECT);
     if (!link.methods.has(definition.method)) throw refuse('not_supported', 'The DevMate extension in this browser (version ' + (link.extension || 'unknown') + ') has no ' + definition.method + '. Update the extension.');
     const names = OWN.some(key => params[key] !== undefined);
-    if (names && answered !== link && (answered || links.size > 1)) throw refuse('browser_changed', (answered
+    const before = answeredBy(caller);
+    if (names && before !== link && (before || links.size > 1)) throw refuse('browser_changed', (before
       ? 'DevMate uses another browser now than the one that answered before (the owner paused that one or chose another, or a browser came or went), and '
       : 'Several browsers are connected and none has answered a call since DevMate started (it was started again, and which browser is used was decided anew), and ') + capability +
       ' names something by an id (a tab, a window, a bookmark, an element) that belongs to one browser, where the same id is something else in another: it was not passed on. Ask the browser that is used now what it has (tabs.list, bookmarks.tree), then call again.');
@@ -349,7 +356,7 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
       // The link is the one the call waits on now: another one, when the first went away and the call could go elsewhere
       // (anywhere: it only looks, hands out no credentials, and names nothing that is one browser's own).
       const item = { id, method: definition.method, params };
-      const entry = { resolve: over(resolve), reject: over(reject), timer: null, link, readOnly: definition.readOnly, names, item,
+      const entry = { resolve: over(resolve), reject: over(reject), timer: null, link, caller, readOnly: definition.readOnly, names, item,
         anywhere: definition.readOnly && !definition.changesWhen?.(params) && !names };
       const give = failure => { const on = entry.link; on.pending.delete(id); on.handed.delete(id); clearTimeout(entry.timer); const queued = on.queue.findIndex(item => item.id === id); if (queued >= 0) on.queue.splice(queued, 1); entry.reject(failure(queued >= 0)); };
       const patience = Math.max(callTimeoutMs, definition.waitMs?.(params) ?? 0);

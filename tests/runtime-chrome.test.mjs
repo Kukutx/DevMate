@@ -908,3 +908,23 @@ test('a browser that connects paused and asks for the first time tells the brows
   assert.deepEqual([told.current, told.browsers], [true, 2]);
   link.close();
 });
+
+test('the browser whose ids a caller holds is kept for each caller: another client\'s look does not let them through to another browser', async () => {
+  const link = createBrowserLink({ callTimeoutMs: 2000 }), methods = ['tabs.list', 'tabs.close'];
+  const serve = linkId => { void (async () => { for (;;) { let work; try { work = await link.next({ linkId, waitMs: 300 }); } catch { return; }
+    for (const call of work.calls) link.result({ linkId, id: call.id, ok: true, result: { by: linkId } }); } })(); };
+  const a = link.attach({ browser: 'Google Chrome', extension: '4.0.6', methods }).linkId; serve(a);
+  const b = link.attach({ browser: 'Microsoft Edge', extension: '4.0.6', methods }).linkId; serve(b);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  // Client X looks while B is used: its ids are B's.
+  assert.deepEqual(await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true, caller: 'X' }), { by: b });
+  // The owner chooses A; client Y looks: Y's ids are A's.
+  link.prefer({ linkId: a });
+  assert.deepEqual(await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true, caller: 'Y' }), { by: a });
+  // X's call with a tab id of B's is not passed on to A, whatever Y did; Y's is.
+  const refused = await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }, { caller: 'X' }).then(() => null, failure => failure);
+  assert.deepEqual([refused?.code, refused?.notStarted], ['browser_changed', true]);
+  assert.match(refused.message, /^DevMate uses another browser now than the one that answered before/);
+  assert.deepEqual(await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }, { caller: 'Y' }), { by: a });
+  link.close();
+});
