@@ -248,6 +248,10 @@ function look(names, most, real) {
     ...(top ? { coveredBy: '<' + top.tagName.toLowerCase() + (top.id ? '#' + top.id : '') + '>' } : {}),
     styles: Object.fromEntries(names.map(name => [name, style.getPropertyValue(name)])), html: html.slice(0, most), ...(html.length > most ? { htmlTruncated: true, htmlChars: html.length } : {}) };
 }
+// What kind of file field an element is: one that takes one file, several, or none at all.
+function fileField() {
+  return this.tagName === 'INPUT' && String(this.type).toLowerCase() === 'file' ? (this.multiple ? 'several' : 'one') : null;
+}
 function stores(withValues) {
   const read = name => {
     try {
@@ -733,6 +737,24 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       if (chosen?.problem === 'not a list') throw fail('invalid_input', 'This element is not a <select>. A list built from other elements is opened with page.click and chosen from the same way.');
       if (chosen?.problem) throw fail('not_found', 'The list has no such choice. It offers: ' + (chosen.choices || []).join(' | '));
       return { tabId: id, selected: chosen, untrusted: true };
+    },
+    // Files put into a file field, as the owner choosing them would: the page is told as it is told of a choice. The
+    // runtime names them by full paths, after it held them to the rules for reading them; nothing here reads them.
+    'page.upload': async ({ tabId, ref, selector, text: shown, files } = {}) => {
+      if (!Array.isArray(files) || !files.length || files.length > 20 || files.some(file => typeof file !== 'string' || !file || file.length > 4096)) throw fail('invalid_input', 'files is a list of 1 to 20 paths.');
+      const { id, session } = await page(tabId);
+      const done = await unlessDialog(session, async () => {
+        const objectId = await element(id, { ref, selector, text: shown }), kind = await onElement(id, objectId, fileField);
+        if (!kind) throw fail('invalid_input', 'This element is not a file field (<input type="file">). A button that opens one is clicked by the page to show the field: page.snapshot or page.inspect finds the field itself.');
+        if (kind === 'one' && files.length > 1) throw fail('invalid_input', 'This file field takes one file, and ' + files.length + ' were given.');
+        await raw(id, 'DOM.setFileInputFiles', { objectId, files }).catch(error => {
+          throw /not allowed|file access|permission/i.test(said(error)) ? fail('forbidden', 'The browser does not let the DevMate extension hand files to a page. The owner switches on "Allow access to file URLs" for it, in the browser\'s extensions page (DevMate, Details).')
+            : fail('browser_error', 'DOM.setFileInputFiles failed: ' + said(error));
+        });
+        return true;
+      });
+      if (done === DIALOG) return withDialog(session, { tabId: id });
+      return { tabId: id, uploaded: files.map(file => file.split(/[\\/]/).pop()) };
     },
     'page.scroll': async ({ tabId, ref, selector, deltaY } = {}) => {
       const { id, session } = await page(tabId);

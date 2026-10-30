@@ -65,7 +65,7 @@ function extension(replies = {}, tabReplies = {}, given = {}) {
   return Object.assign(made, { listed: tabId => listing(made, tabId) });
 }
 // The methods of the debugger that change a page, or what is debugged. The others are its reads: DEBUG_READ_ONLY.
-const CHANGES = ['page.click', 'page.hover', 'page.type', 'page.press', 'page.select', 'page.scroll', 'page.evaluate', 'page.reload', 'page.emulate', 'page.dialog', 'page.debugStop', 'page.callTool'];
+const CHANGES = ['page.click', 'page.hover', 'page.type', 'page.press', 'page.select', 'page.scroll', 'page.evaluate', 'page.reload', 'page.emulate', 'page.dialog', 'page.debugStop', 'page.callTool', 'page.upload'];
 // A function the page is sent, run here as the page would run it: on an element, or as the expression it came in. It
 // is carried over as text, so it can use nothing from the file it was written in: whatever of the page it names
 // (document, window, getComputedStyle) is given to it by the test.
@@ -667,6 +667,46 @@ test('what page.tools and page.callTool run in the page stand on their own there
   const circular = {}; circular.self = circular;
   context.executeTool = async () => circular;
   assert.deepEqual(await page(call, { document: { modelContext: context } }), { result: '[object Object]' });
+});
+
+test('page.upload puts the files the runtime names into a file field, as the owner choosing them would, and says what keeps it from doing so', async () => {
+  let kind = 'several';
+  const { methods, sent, replies, say, listed } = harness(shown({ 'Runtime.callFunctionOn': () => ({ result: { type: 'string', value: kind } }) }));
+  await listed();
+  const files = ['C:\\Users\\owner\\app\\report.pdf', '/home/owner/app/photo.png'];
+  assert.deepEqual(await methods['page.upload']({ ref: 13, files }), { tabId: 1, uploaded: ['report.pdf', 'photo.png'] });
+  assert.deepEqual(sent('DOM.setFileInputFiles'), [{ objectId: 'node-13', files }]);
+  assert.match(sent('Runtime.callFunctionOn')[0].functionDeclaration, /^function fileField\(\) \{/);
+  // A field that takes one file takes one; what is no file field takes none, and is not handed any.
+  kind = 'one';
+  await refuses(methods['page.upload']({ ref: 13, files }), 'invalid_input', /^This file field takes one file, and 2 were given\.$/);
+  assert.deepEqual(await methods['page.upload']({ ref: 13, files: files.slice(1) }), { tabId: 1, uploaded: ['photo.png'] });
+  kind = null;
+  await refuses(methods['page.upload']({ ref: 13, files }), 'invalid_input', /^This element is not a file field \(<input type="file">\)\./);
+  assert.equal(sent('DOM.setFileInputFiles').length, 2);
+  // A browser that does not let the extension hand files over says so, with what the owner does about it.
+  kind = 'several';
+  replies['DOM.setFileInputFiles'] = () => no('Not allowed');
+  await refuses(methods['page.upload']({ ref: 13, files }), 'forbidden', /"Allow access to file URLs"/);
+  replies['DOM.setFileInputFiles'] = () => no('Node is not a file input element');
+  await refuses(methods['page.upload']({ ref: 13, files }), 'browser_error', /^DOM\.setFileInputFiles failed: Node is not a file input element$/);
+  for (const wrong of [undefined, [], 'a.txt', [''], [5], Array(21).fill('a'), ['a'.repeat(4097)]]) await refuses(methods['page.upload']({ ref: 13, files: wrong }), 'invalid_input', /^files is a list of 1 to 20 paths\.$/);
+  // A field whose page answers the choice with a dialog: the files are in it by then, and the dialog is said.
+  delete replies['DOM.setFileInputFiles'];
+  replies['Runtime.callFunctionOn'] = () => new Promise(() => {});
+  const putting = methods['page.upload']({ ref: 13, files });
+  await settle(); say(1, 'Page.javascriptDialogOpening', { type: 'alert', message: 'Too large' });
+  assert.deepEqual(await putting, { tabId: 1, dialog: 'alert: "Too large"', note: DIALOG_NOTE, untrusted: true });
+});
+
+test('what page.upload asks the page stands on its own there: a file field, for one file or several, and nothing else', async () => {
+  const { methods, sent, listed } = harness(shown({ 'Runtime.callFunctionOn': { result: { type: 'string', value: 'one' } } }));
+  await listed();
+  await methods['page.upload']({ ref: 13, files: ['/a'] });
+  const [{ functionDeclaration }] = sent('Runtime.callFunctionOn'), kind = element => onElement(functionDeclaration)(element);
+  assert.equal(kind({ tagName: 'INPUT', type: 'file', multiple: false }), 'one');
+  assert.equal(kind({ tagName: 'INPUT', type: 'FILE', multiple: true }), 'several');
+  for (const other of [{ tagName: 'INPUT', type: 'text' }, { tagName: 'BUTTON', type: 'file' }, { tagName: 'DIV' }]) assert.equal(kind(other), null);
 });
 
 test('a selector or a text goes into the page as data: whatever it says, none of it runs', async () => {
@@ -1292,7 +1332,7 @@ test('the extension offers each read of the debugger as a read and the rest of i
   for (const name of [...CHANGES, 'tabs.back', 'tabs.forward']) { assert.equal(typeof methods[name], 'function', name); assert.equal(READ_ONLY.includes(name), false, name + ' changes something, so it is not offered as a read'); }
   // A method added to the debugger belongs on one of the two lists, here and there.
   assert.deepEqual(Object.keys(harness().methods).sort(), [...DEBUG_READ_ONLY, ...CHANGES].sort());
-  assert.equal((await methods['browser.info']()).methods.filter(name => CHANGES.includes(name) || DEBUG_READ_ONLY.includes(name)).length, 20, 'and the extension says it has them all');
+  assert.equal((await methods['browser.info']()).methods.filter(name => CHANGES.includes(name) || DEBUG_READ_ONLY.includes(name)).length, 21, 'and the extension says it has them all');
   // The tab in front is the one the browser says is in front, and time is the time that was handed in.
   time.now += 60000;
   const view = await methods['page.console']();
@@ -1958,7 +1998,7 @@ test('page.screenshot of the tab in front does not wait to the end for a picture
 const OF_A_TAB = { 'page.read': {}, 'page.screenshot': {}, 'page.console': {}, 'page.network': {}, 'page.networkRequest': { requestId: '1' }, 'page.snapshot': {}, 'page.inspect': { selector: 'button' },
   'page.storage': { includeValues: true }, 'page.waitFor': { text: 'Allow' }, 'page.click': { text: 'Allow' }, 'page.hover': { text: 'Allow' }, 'page.type': { text: 'yes' }, 'page.press': { key: 'Enter' },
   'page.select': { selector: 'select', value: 'allow' }, 'page.scroll': { deltaY: 100 }, 'page.evaluate': { expression: 'sessionStorage.length' }, 'page.reload': {}, 'page.emulate': { reset: true },
-  'page.dialog': { accept: true }, 'page.run': { steps: [{ method: 'page.read' }] }, 'page.tools': {}, 'page.callTool': { name: 'approve' }, 'tabs.back': {}, 'tabs.forward': {}, 'tabs.navigate': { url: 'https://elsewhere.example/' } };
+  'page.dialog': { accept: true }, 'page.run': { steps: [{ method: 'page.read' }] }, 'page.tools': {}, 'page.callTool': { name: 'approve' }, 'page.upload': { selector: 'input', files: ['/tmp/a.txt'] }, 'tabs.back': {}, 'tabs.forward': {}, 'tabs.navigate': { url: 'https://elsewhere.example/' } };
 const WORKBENCH = /^This tab is DevMate's own workbench, where the owner decides at the computer\. It is not read, worked or sent elsewhere through the browser\.$/;
 test('DevMate\'s own workbench is not read, worked or sent elsewhere through the browser', async () => {
   const { methods, open, asked, names } = extension({}, { update: (id, change) => ({ id, ...change }) }, { ownPort: () => 8788 });

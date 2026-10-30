@@ -12,6 +12,7 @@ import { frame, frames, serveChromeHost } from '../runtime/chrome-host.mjs';
 import { createChromeRegistration } from '../runtime/platform/chrome-registration.mjs';
 import { READ_ONLY, RUN_STEPS, createCapabilities } from '../chrome-extension/capabilities.js';
 import { startRuntime } from '../runtime/main.mjs';
+import { DevMateService } from '../runtime/service.mjs';
 import { main as cli } from '../runtime/cli.mjs';
 
 const owner = { id: 'owner', surface: 'local' }, connected = { id: 'owner' };
@@ -1000,4 +1001,33 @@ test('a run of page methods is held step by step to what each method takes alone
   assert.equal(definition.waitMs({ steps: [{ method: 'page.waitFor', input: { timeoutMs: 30000 } }, { method: 'page.click' }] }), 70000);
   assert.equal(definition.waitMs({ steps: Array(30).fill({ method: 'page.waitFor', input: { timeoutMs: 30000 } }) }), 300000);
   link.close();
+});
+
+test('page.upload hands the browser files of the project of the call, read by the rules for reading them, and never a path the caller wrote', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-upload-')), app = path.join(temp, 'app');
+  fs.mkdirSync(path.join(app, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(app, 'docs', 'report.pdf'), 'pdf'); fs.writeFileSync(path.join(app, '.env'), 'TOKEN=1'); fs.writeFileSync(path.join(temp, 'outside.txt'), 'x');
+  const service = new DevMateService({ instanceRoot: path.join(temp, 'instance'), endpoint: '' });
+  t.after(async () => { await service.close(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  await service.ready;
+  const project = await service.call('project.create', { root: app, name: 'app' }, owner), given = [];
+  const { linkId } = service.browser.attach({ browser: 'Google Chrome', extension: '4.0.7', methods: ['tabs.list', 'page.upload'] });
+  void (async () => { for (;;) { let work; try { work = await service.browser.next({ linkId, waitMs: 300 }); } catch { return; }
+    for (const call of work.calls) { given.push(call.params); service.browser.result({ linkId, id: call.id, ok: true, result: { uploaded: call.params.files.length } }); } } })();
+  const upload = (input, projectId = project.id) => service.call('capability.call', { capability: 'chrome.page.upload', ...(projectId ? { projectId } : {}), input }, connected);
+  assert.deepEqual(await upload({ ref: 7, files: ['docs/report.pdf'] }), { uploaded: 1 });
+  assert.deepEqual(given, [{ ref: 7, files: [fs.realpathSync.native(path.join(app, 'docs', 'report.pdf'))] }]);
+  // What could not be read is not handed over: a credential file of a project that keeps them out, a path out of the
+  // project, a folder, a file that is not there, and files without a project.
+  await assert.rejects(upload({ ref: 7, files: ['.env'] }), { code: 'protected_workspace_path' });
+  await assert.rejects(upload({ ref: 7, files: ['../outside.txt'] }), error => ['outside_project', 'invalid_path', 'unsafe_path'].includes(error.code));
+  await assert.rejects(upload({ ref: 7, files: [path.join(temp, 'outside.txt')] }), error => ['outside_project', 'invalid_path', 'unsafe_path'].includes(error.code));
+  await assert.rejects(upload({ ref: 7, files: ['docs'] }), { code: 'invalid_input', message: /^Only files go into a page, and docs is a folder\.$/ });
+  await assert.rejects(upload({ ref: 7, files: ['docs/none.pdf'] }), { code: 'not_found' });
+  await assert.rejects(upload({ ref: 7, files: ['docs/report.pdf'] }, null), { code: 'invalid_input', message: /^chrome\.page\.upload takes files of a project: give projectId, and the files by their paths in it\.$/ });
+  assert.equal(given.length, 1);
+  // The link itself takes no paths but those the project gave, whatever the input says.
+  await assert.rejects(service.browser.call({ capability: 'chrome.page.upload', input: { ref: 7, files: ['C:/Windows/win.ini'] } }), { code: 'invalid_input', notStarted: true });
+  await assert.rejects(service.browser.call({ capability: 'chrome.page.upload', input: { ref: 7, files: ['a', 'b'] } }, { files: ['/x'] }), { code: 'invalid_input' });
+  assert.equal(given.length, 1);
 });

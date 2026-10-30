@@ -96,6 +96,10 @@ const METHODS = [
   ['page.type', false, 'Type text into the element that has the keyboard, or into one named by ref or selector. clear empties the field first. typed in the answer is how many characters were really typed: none where a dialog came up first.', { tabId: tab, ref: element.ref, selector: element.selector, text: z.string().max(100000), clear: z.boolean().optional() }],
   ['page.press', false, 'Press one key in the page: a letter or a digit, or Enter, Tab, Escape, Backspace, Delete, an arrow, Home, End, PageUp, PageDown, Space (written in any case). modifiers holds alt, ctrl, meta or shift down with it.',
     { tabId: tab, key: z.string().regex(/^([a-z0-9]|Enter|Tab|Escape|Backspace|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Home|End|PageUp|PageDown|Space)$/i), modifiers: z.array(z.enum(['alt', 'ctrl', 'meta', 'shift'])).max(4).optional() }],
+  // The files are named by their paths in the project of the call; the runtime hands the browser the full paths it
+  // held to the rules for reading them (see call), and never what the caller wrote.
+  ['page.upload', false, 'Put files of a project (projectId; files by their paths in it) into a file field of the page (an <input type=file>, by ref, selector or text), as the owner choosing them would. The page may send them anywhere. The same rules hold as for reading them. The extension needs "Allow access to file URLs", which the owner switches on.',
+    { tabId: tab, ...element, files: z.array(text(4096).min(1)).min(1).max(20).describe('Paths in the project, as workspace_read takes them.') }],
   ['page.select', false, 'Choose from a <select> list (by ref or selector): the choice by its value, or by label, the text it shows.', { tabId: tab, ref: element.ref, selector: element.selector, value: text(1000).min(1).optional(), label: text(1000).min(1).optional() }],
   ['page.scroll', false, 'Scroll an element into view (ref or selector), or the page by deltaY pixels.', { tabId: tab, ref: element.ref, selector: element.selector, deltaY: z.number().int().min(-100000).max(100000).optional() }],
   ['page.evaluate', false, 'Run a piece of JavaScript in the page and get its value back as text. It runs with everything the page itself can do, in the owner\'s signed-in session.', { tabId: tab, expression: text(100000).min(1), awaitPromise: z.boolean().optional() }],
@@ -135,8 +139,9 @@ function readable(method, answer) {
 
 const HOW_TO_CONNECT = 'Open Chrome or Edge with the DevMate extension on the owner\'s computer. If it is installed and still not connected, the owner runs: devmate chrome install';
 // The extension's own refusals, handed on with their code: a model is told whether the browser failed, the page's
-// script threw, a dialog or another element is in the way, or a wait ended. Any other code is a browser error.
-const ERROR_CODES = new Set(['invalid_input', 'not_found', 'not_supported', 'browser_error', 'paused', 'page_error', 'dialog_open', 'covered', 'timeout']);
+// script threw, a dialog or another element is in the way, a wait ended, or the browser does not let the extension do
+// it (forbidden: a setting of the extension that the owner switches on). Any other code is a browser error.
+const ERROR_CODES = new Set(['invalid_input', 'not_found', 'not_supported', 'browser_error', 'paused', 'page_error', 'dialog_open', 'covered', 'timeout', 'forbidden']);
 // The owner's own switch in the extension. It is a decision, not a fault, and a model is told so.
 const PAUSED = 'The owner has paused DevMate\'s use of this browser, in the DevMate extension. That is their decision, not a fault: do not try again or work around it. Say so; they switch it back on when they want.';
 // A browser host asks for work again the moment it was answered. A link nobody is asking on for longer than IDLE_MS
@@ -348,7 +353,8 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
   }
 
   /** One capability of the browser: chrome.<method> with its input. readOnly: the caller asked for something that only reads. */
-  async function call({ capability, input = {} } = {}, { readOnly = false, signal, caller = '' } = {}) {
+  // files: for page.upload, the full paths of the files named, as the caller's project gave them after its rules.
+  async function call({ capability, input = {} } = {}, { readOnly = false, signal, caller = '', files } = {}) {
     const refuse = (code, message) => fault(code, message, { notStarted: true });
     const definition = BY_NAME.get(capability);
     if (!definition) throw refuse('unknown_capability', 'Unknown browser capability: ' + capability + '. capability_list {engine:"chrome"} shows them.');
@@ -368,6 +374,10 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     const link = current();
     if (!link) throw refuse('browser_unavailable', 'No browser is connected to DevMate. ' + HOW_TO_CONNECT);
     if (!link.methods.has(definition.method)) throw refuse('not_supported', 'The DevMate extension in this browser (version ' + (link.extension || 'unknown') + ') has no ' + definition.method + '. Update the extension.');
+    if (definition.method === 'page.upload') {
+      if (!Array.isArray(files) || files.length !== params.files.length) throw refuse('invalid_input', capability + ' takes files of a project: give projectId, and the files by their paths in it.');
+      params = { ...params, files };
+    }
     // An id in a step of a run is an id all the same.
     const names = [params, ...(params.steps || []).map(step => step.input)].some(given => OWN.some(key => given[key] !== undefined));
     const before = answeredBy(caller);

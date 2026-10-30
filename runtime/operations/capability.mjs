@@ -1,6 +1,8 @@
+import fs from 'node:fs';
 import { z } from 'zod';
 import { DomainError } from '../store.mjs';
 import { BROWSER_ENGINE, isBrowserCapability } from '../chrome.mjs';
+import { resolveProjectPath } from '../workspace.mjs';
 import { hasWords, id, keywords, mutation, ownerCommand, projectScope } from './shared.mjs';
 
 // Domain capabilities: the built-in engines (browser control and QA, Godot, reverse
@@ -8,6 +10,20 @@ import { hasWords, id, keywords, mutation, ownerCommand, projectScope } from './
 // Who asks the browser, for which of the browsers' ids they hold: the owner at this computer, or a client by the way
 // it came and the name it gave (see the answered browsers in ../chrome.mjs).
 const browserCaller = context => context?.surface === 'local' ? 'local' : 'connected ' + (context?.via || '') + ' ' + String(context?.client || '');
+// What a page is given to upload is read from a project of the call, by the rules for reading it (workspace.read):
+// the page may send it anywhere, so nothing goes that the caller could not read. The browser is handed the full paths.
+const UPLOAD = BROWSER_ENGINE + '.page.upload';
+function uploads(service, args) {
+  if (args.capability !== UPLOAD) return undefined;
+  if (!args.projectId) throw new DomainError('invalid_input', UPLOAD + ' takes files of a project: give projectId, and the files by their paths in it.');
+  const project = service.project(args.projectId), named = Array.isArray(args.input?.files) ? args.input.files : [];
+  return named.map(file => {
+    if (typeof file !== 'string') return file;
+    const full = resolveProjectPath(project, file, { links: true });
+    if (!fs.statSync(full).isFile()) throw new DomainError('invalid_input', 'Only files go into a page, and ' + file + ' is a folder.');
+    return full;
+  });
+}
 
 export function defineCapabilityOperations(service, add) {
   const engine = z.string().max(80);
@@ -29,7 +45,7 @@ export function defineCapabilityOperations(service, add) {
     }, { withoutProject: listsBrowser });
   add('capability.call', { ...projectScope, capability: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()).default({}), ...mutation }, false,
     'Invoke one capability by the name capability_list gave it, with the input its schema describes (capability_list {name} returns that schema). The result is the capability\'s own. For a capability marked readOnly use capability_query.', (args, context) =>
-      ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), caller: browserCaller(context) })
+      ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), caller: browserCaller(context), files: uploads(service, args) })
         : service.capabilities.call(args, { signal: service.waitSignal(context), ownerDecides: service.ownerDecides(context) }),
     { destructive: true, openWorld: true, withoutProject: ofBrowser });
   // The same call for what only reads. A client that asks its user before every change has nothing to ask here.
