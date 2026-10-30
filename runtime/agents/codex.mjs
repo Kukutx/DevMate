@@ -31,15 +31,18 @@ export class CodexAdapter extends AdapterBase {
       const inherit = this.options.inheritMcpServers === true;
       const own = new Set((this.options.mcpServers || []).map(server => server.name));
       const args = ['app-server'];
+      // What a delegated session is not to have of the owner's Codex, as configuration: its MCP servers, each
+      // switched off by name (`mcp_servers={}` leaves configured servers in place), and the two features that bring
+      // further ones. apps adds the account's connectors as one more server; plugins carry servers of their own,
+      // which `codex mcp list` does not show.
+      const withheld = { mcp_servers: {}, features: { apps: false, plugins: false } };
       if (!inherit) {
-        // `-c mcp_servers={}` leaves configured servers in place; each is switched off by name.
         const configured = await this.configuredMcpServers(command, env);
         // A server of the same name in Codex's own configuration would be merged with the one passed here, key by key.
         const clash = configured.find(name => own.has(name));
         if (clash) throw fail('mcp_isolation_failed', 'Codex has its own MCP server named "' + clash + '", the name of a server DevMate passes to a delegated session. Rename or remove it in Codex (codex mcp remove ' + clash + ').', { servers: [clash] });
-        for (const name of configured) args.push('-c', 'mcp_servers.' + name + '.enabled=false');
-        // The apps feature adds the account's connectors as one more MCP server.
-        args.push('-c', 'features.apps=false');
+        for (const name of configured) { args.push('-c', 'mcp_servers.' + name + '.enabled=false'); withheld.mcp_servers[name] = { enabled: false }; }
+        for (const [feature, value] of Object.entries(withheld.features)) args.push('-c', 'features.' + feature + '=' + value);
         this.assertOpen();
       }
       this.transport = new JsonProcess({ command, args, cwd: this.cwd, env, jsonrpc: false,
@@ -54,10 +57,14 @@ export class CodexAdapter extends AdapterBase {
       this.assertOpen();
       await this.request('initialize', { clientInfo: { name: 'devmate', title: 'DevMate', version: VERSION } });
       this.transport.notify('initialized', {});
-      const config = {};
-      if (this.options.mcpServers?.length) config.mcp_servers = Object.fromEntries(this.options.mcpServers.map(server => [server.name, {
+      // The thread is told the same again. What a thread is given as configuration takes the place of what the
+      // process was started with, table by table: with DevMate's own server named here and nothing else, Codex
+      // 0.161.0 had every server that was switched off on the command line back and connected.
+      const config = inherit ? {} : { features: withheld.features };
+      const servers = { ...(inherit ? {} : withheld.mcp_servers), ...Object.fromEntries((this.options.mcpServers || []).map(server => [server.name, {
         command: server.command, args: server.args || [], enabled: true, ...(server.env ? { env: server.env } : {})
-      }]));
+      }])) };
+      if (Object.keys(servers).length) config.mcp_servers = servers;
       const params = { cwd: this.cwd, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write',
         ...(model ? { model } : {}), ...(Object.keys(config).length ? { config } : {}) };
       // excludeTurns: a resumed thread returns its metadata, not its whole history on one line.
@@ -97,6 +104,9 @@ export class CodexAdapter extends AdapterBase {
         if (!cursor) break;
       }
     } catch (error) {
+      // Codex answers once every server of the session has started or failed. One that has not answered in time
+      // leaves it unknown what the session reaches: said as that, not as a request that timed out.
+      if (error.code === 'request_timeout') throw fail('mcp_isolation_failed', 'Codex did not say in time which MCP servers this session reaches (it answers once all of them have started), so it is not known that the owner\'s own servers are kept out of it. ' + INHERIT_HINT);
       // An app-server that does not answer this method cannot be asked; the overrides above still apply.
       if (error.code !== 'rpc_error') throw error;
       this.emit('diagnostic', { nativeMethod: 'mcpServerStatus/list', text: 'MCP isolation could not be verified: ' + error.message, delta: true });

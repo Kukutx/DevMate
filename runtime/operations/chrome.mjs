@@ -7,10 +7,16 @@ import { z } from 'zod';
 export function defineChromeOperations(service, add) {
   const local = { localOnly: true };
   const linkId = z.string().min(1).max(80);
-  add('chrome.attach', { browser: z.string().max(100).default(''), extension: z.string().max(40).default(''), methods: z.array(z.string().min(1).max(80)).max(200) }, false,
+  add('chrome.attach', { browser: z.string().max(100).default(''), extension: z.string().max(40).default(''), methods: z.array(z.string().min(1).max(80)).max(200), paused: z.boolean().optional() }, false,
     'Connect a browser to this runtime. Used by DevMate\'s browser host.', args => service.browser.attach(args), local);
+  // Which browser is used where several are connected is the owner's to say, in the panel of the browser they mean:
+  // these two carry that word, and are spoken by that browser's own host about its own link.
+  add('chrome.state', { linkId, paused: z.boolean() }, false,
+    'Say that the owner paused this browser, or lets DevMate use it again. Used by DevMate\'s browser host.', args => service.browser.state(args), { ...local, idempotent: true });
+  add('chrome.prefer', { linkId }, false,
+    'Use this browser from now on, where several are connected: the owner chose it in its panel. Used by DevMate\'s browser host.', args => service.browser.prefer(args), { ...local, idempotent: true });
   add('chrome.next', { linkId, waitMs: z.number().int().min(0).max(30000).default(25000) }, false,
-    'Wait for what the runtime asks of the browser next. Used by DevMate\'s browser host.', args => service.browser.next(args), local);
+    'Wait for what the runtime asks of the browser next. Used by DevMate\'s browser host.', (args, context) => service.browser.next(args, { signal: context?.signal }), local);
   add('chrome.result', { linkId, id: z.string().min(1).max(80), ok: z.boolean(), result: z.unknown().optional(),
     error: z.object({ code: z.string().max(80).optional(), message: z.string().max(2000).optional() }).optional() }, false,
     'Bring back what the browser answered. Used by DevMate\'s browser host.', args => service.browser.result(args), { ...local, projectOf: () => undefined });

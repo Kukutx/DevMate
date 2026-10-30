@@ -36,7 +36,7 @@ export function defineCollaborationOperations(service, add) {
     });
   add('message.list', listOptions, true, 'Read workflow messages and delivery state.', (args, context) => service.list('message', args, context));
   add('message.send', { ...workflowScope, recipientIds: z.array(id).min(1).max(16), body: text.min(1), ...mutation }, false,
-    'Queue messages for real native-agent delivery.', (args, context) => service.agents.send(args, actor(context)), { openWorld: true });
+    'Queue messages for real native-agent delivery.', (args, context) => service.agents.send(args, actor(context)), { openWorld: true, delegates: true });
   add('delivery.list', listOptions, true, 'Inspect each recipient delivery separately.', (args, context) => service.list('delivery', args, context));
 
   add('task.list', listOptions, true, 'List workflow tasks.', (args, context) => service.list('task', args, context));
@@ -61,9 +61,13 @@ export function defineCollaborationOperations(service, add) {
         if (args.instruction !== undefined || args.assigneeId !== undefined) throw new DomainError('invalid_input', 'Cancel execution before changing its instruction or assignment.');
         const active = deliveries.filter(item => item.status === 'running');
         service.store.transaction(() => {
-          for (const delivery of deliveries.filter(item => item.status === 'queued')) service.agents.cancelQueued(delivery.id);
+          // Taking back what has not begun (queued, or still waiting for the owner to allow it) settles the task with
+          // it, which is a change of the task: the revision the caller named was compared above, and is not compared
+          // again with the one that change made. (Compared again, a task that only waited could not be cancelled where
+          // a revision is named, which is how the workbench does it.)
+          for (const delivery of deliveries.filter(item => item.status !== 'running')) service.agents.cancelQueued(delivery.id);
           service.store.update('task', args.id, { status: active.length ? 'cancelling' : 'cancelled',
-            ...(args.title !== undefined ? { title: args.title } : {}) }, args.expectedRevision);
+            ...(args.title !== undefined ? { title: args.title } : {}) });
         });
         await Promise.all([...new Set(active.map(item => item.agentId))].map(agentId => service.agents.cancel(agentId)));
         return service.store.get('task', args.id);
@@ -90,12 +94,23 @@ export function defineCollaborationOperations(service, add) {
   // the model that delegated the work may not answer for the person.
   add('approval.list', listOptions, true, 'List native approval requests.', (args, context) => service.list('approval', args, context));
   add('approval.resolve', { id, ...revision, ...mutation, optionId: z.string().min(1).max(200) }, false,
-    'Return the user\'s decision to the exact waiting permission request: optionId is one of the options approval.list shows for it.', args => service.agents.resolve('approval', args), { destructive: true, openWorld: true, humanOnly: true });
+    'Return the user\'s decision to the exact waiting permission request: optionId is one of the options approval.list shows for it. Whether a task a connected client handed to an agent is run at all (kind delegation) is answered at the owner\'s computer alone.', (args, context) => {
+      // Full access hands the owner's client what the owner decides about this computer. Whether a task is run on
+      // their account with a provider is not among that: the client that asked would be the one to answer.
+      if (service.store.get('approval', args.id).kind === 'delegation' && context.surface !== 'local') throw new DomainError('forbidden', 'Whether this task is run is the owner\'s to say at their own computer, in either access profile: ' +
+        'in the DevMate workbench there (devmate ui) or in their editor. devmate delegation allow, run there, ends the asking.');
+      return service.agents.resolve('approval', args);
+    }, { destructive: true, openWorld: true, humanOnly: true });
   add('input.list', listOptions, true, 'List native input requests.', (args, context) => service.list('input', args, context));
   add('input.respond', { id, ...revision, ...mutation, response: z.unknown() }, false,
     'Return the user\'s answer to the exact waiting request (input.list shows it under details). For an agent\'s question: the answer as plain text when there is one question, otherwise {answers:{"<question id or text>":"<answer>"}}. For a form (details.requestedSchema): {action:"accept", content:{…}}, {action:"decline"} or {action:"cancel"}.',
-    args => service.store.get('input', args.id).source === 'mcp' ? service.inputs.respond(args) : service.agents.resolve('input', args), { humanOnly: true });
-  add('approval.cancel', { id, ...mutation }, false, 'Cancel the native turn that is awaiting this approval.', args => service.agents.cancel(service.store.get('approval', args.id).agentId));
+    // Who answers goes with it: what a connected client answers (it can, with full access) is its text in the task.
+    (args, context) => service.store.get('input', args.id).source === 'mcp' ? service.inputs.respond(args) : service.agents.resolve('input', args, actor(context)), { humanOnly: true });
+  add('approval.cancel', { id, ...mutation }, false, 'Cancel the native turn that is awaiting this approval. Of a task that waits for the owner to allow it (kind delegation) there is no turn yet: that task is taken back.', args => {
+    const approval = service.store.get('approval', args.id);
+    if (approval.kind !== 'delegation') return service.agents.cancel(approval.agentId);
+    return { id: approval.agentId, requested: ['queued', 'held'].includes(service.store.get('delivery', approval.deliveryId).status) && service.agents.cancelQueued(approval.deliveryId).status === 'cancelled' };
+  });
 
   add('reference.list', listOptions, true, 'List project and workflow references.', (args, context) => service.list('reference', args, context));
   add('reference.add', { ...workflowScope, uri: z.string().min(1).max(2000), name: z.string().min(1).max(200),

@@ -36,14 +36,39 @@ export const listOptions = { projectId: projectReference.optional(), workflowId:
 // A command is either shell text (PowerShell on Windows, sh elsewhere) or an exact executable launch.
 export const commandShape = { command: z.string().min(1).max(100000).optional(), file: z.string().min(1).max(4096).optional(),
   args: z.array(z.string().max(100000)).max(2000).optional(), cwd: z.string().max(4096).optional(),
-  timeoutMs: z.number().int().min(1000).max(86400000).optional() };
+  timeoutMs: z.number().int().min(1000).max(86400000).optional(),
+  env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,199}$/), z.string().max(32768)).optional().describe('Environment variables for this command only, beside the ones every command gets.') };
+// Words to look for in a list of tools: every one of them has to be in the name or the description.
+export const keywords = z.string().min(1).max(200).optional().describe('Words to look for in names and descriptions; all of them have to be there.');
+export const hasWords = (query, ...texts) => { const where = texts.join(' ').toLowerCase().replace(/[._]/g, ' '); return String(query).toLowerCase().replace(/[._]/g, ' ').split(/\s+/).filter(Boolean).every(word => where.includes(word)); };
+
+// A name somebody else chose (a client names projects and agents, and says what it is called itself), where DevMate
+// says it among words of its own: on one line, without a character that acts on what shows it or turns the line
+// around, with no quotation mark of its own (each becomes an apostrophe), and cut short. named: that, in quotes
+// which the name cannot close, so that everything outside them is DevMate's.
+export const plainName = (name, most = 60) => String(name).replace(/\s+/g, ' ').replace(/[\p{Cc}\p{Bidi_Control}]/gu, '').replace(/\p{Quotation_Mark}/gu, '\'').slice(0, most);
+export const named = (name, most) => '"' + plainName(name, most) + '"';
 
 export const now = () => new Date().toISOString();
 export const hash = value => createHash('sha256').update(value).digest('hex');
-export const actor = context => ({ id: context.id, kind: 'user', label: 'You' });
+// client: sent through a connected client, not by the owner at this computer. A task that comes that way is run
+// by a coding agent only with the owner's word (delegation.read).
+// It is named as that too: an agent that reads who wrote to it is not told "You", which is the owner at the computer.
+export const actor = context => context.surface === 'local' ? { id: context.id, kind: 'user', label: 'You' } : { id: context.id, kind: 'user', label: 'Connected client', client: true };
+// The command line that calls an operation with an input, as the owner types it on this computer. The shells of
+// Windows take the double quotes out of an argument, so there the input goes through a file.
+export const ownerCommand = (operation, json, platform = process.platform) => 'devmate ' + operation + (platform === 'win32' ? ' --file <a file that holds ' + json + '>' : ' --json \'' + json + '\'');
 export const within = (root, target) => { const relative = path.relative(root, target); return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative)); };
 export const oneCommand = value => {
   if ((value.command === undefined) === (value.file === undefined)) throw new DomainError('invalid_command', 'Supply either command text or an executable file with args.');
   if (value.command !== undefined && value.args !== undefined) throw new DomainError('invalid_command', 'args applies only to an executable file.');
-  return value;
+  // The command's own variables. DevMate's are not the caller's to set: among them is the mark by which the devmate
+  // command line knows that a connected client started it, and not the owner at this computer.
+  const { env, ...command } = value;
+  if (env === undefined) return command;
+  const names = Object.keys(env);
+  if (names.length > 64) throw new DomainError('invalid_command', 'env takes at most 64 variables.');
+  const reserved = names.find(name => name.toUpperCase().startsWith('DEVMATE_'));
+  if (reserved) throw new DomainError('invalid_command', reserved + ' is one of DevMate\'s own variables and is not set by a command.');
+  return { ...command, environment: env };
 };

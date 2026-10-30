@@ -1,4 +1,8 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { instanceDirectory } from './client.mjs';
 import { EXTENSION_ORIGIN } from './chrome.mjs';
 import { VERSION } from './version.mjs';
 
@@ -20,7 +24,7 @@ export const PROTOCOL = 1;
 const MAX_TO_BROWSER = 1024 * 1024, MAX_FROM_BROWSER = 64 * 1024 * 1024;
 // What one answer of the browser may weigh on its way into the runtime (a picture of a page is a few megabytes).
 const MAX_RESULT_BYTES = 12 * 1024 * 1024;
-const ACTIONS = ['status', 'start', 'workbench', 'mcpUrl', 'pending'];
+const ACTIONS = ['status', 'start', 'workbench', 'mcpUrl', 'pending', 'prefer'];
 const pause = (ms, signal) => new Promise(resolve => { const timer = setTimeout(resolve, ms); signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true }); });
 
 /** The messages of a stream that carries the browser's framing: each a four-byte length, least significant first, then JSON. */
@@ -50,25 +54,53 @@ export function frame(message) {
  * Serve one browser. origin is what the browser says started this program; input and output are its standard streams;
  * client is a host client of the instance (runtime/host-client.cjs). Resolves when the browser closes the connection.
  */
-export async function serveChromeHost({ origin, input, output, client, pollMs = 2000, pendingMs = 5000, log = () => {} } = {}) {
+export async function serveChromeHost({ origin, input, output, client, pollMs = 2000, pendingMs = 5000, log = () => {}, replaced = () => false } = {}) {
   // A browser names the extension it starts a host for. Any other caller is not served.
   if (origin !== EXTENSION_ORIGIN) throw Object.assign(new Error('devmate chrome-host is started by a browser for the DevMate extension, not by hand.'), { code: 'forbidden' });
   const stop = new AbortController(), signal = stop.signal;
-  let extension = null, linkId = null, running = null, pendingCount = null, polling = false;
+  let extension = null, linkId = null, running = null, pendingCount = null, polling = false, leave = () => {};
+  // Whether this browser is the one DevMate uses, and how many are connected: told to the extension when it changes,
+  // and once for every link (a link is new after the runtime was started again, and the extension forgot what it knew).
+  let standing = null;
+  // What the runtime was last told of the owner's pause for this link (null: nothing yet). The pause can change while
+  // the link is being made, after what goes with chrome.attach was put together, and a call that says it can fail: it
+  // is said again until the runtime has it, and never taken as said before it was.
+  let toldPaused = null;
+  const tellPause = async () => {
+    const link = linkId, paused = extension?.paused === true;
+    if (!link || toldPaused === paused) return;
+    const answer = await client.call('chrome.state', { linkId: link, paused }).catch(error => { log('state: ' + (error?.message || error)); return null; });
+    if (!answer || linkId !== link) return;
+    toldPaused = paused;
+    stands(answer);
+    // (It changed again meanwhile: that is said too.)
+    if ((extension?.paused === true) !== paused) await tellPause();
+  };
+  const stands = answer => {
+    if (typeof answer?.current !== 'boolean' || !Number.isInteger(answer.browsers)) return;
+    if (standing && standing.current === answer.current && standing.browsers === answer.browsers) return;
+    standing = { current: answer.current, browsers: answer.browsers };
+    send({ type: 'event', name: 'link.status', data: standing });
+  };
   const send = message => {
     const data = frame(message);
     if (data.length - 4 > MAX_TO_BROWSER) return false;
     try { output.write(data); return true; } catch { return false; }
   };
+  // port: the local port this runtime answers the owner on, the workbench among it. The extension keeps the browser's
+  // tools off the pages of that origin: what is decided there is the owner's to decide at the computer.
   const runtime = async () => {
-    const status = await client.status();
-    return { running: status.running === true, version: status.running === true ? status.record?.version || VERSION : VERSION, ...(status.outdated ? { outdated: true } : {}) };
+    const status = await client.status(), up = status.running === true;
+    // filesGone: the folder the runtime was started from was removed under it; it has to be started again.
+    return { running: up, version: up ? status.record?.version || VERSION : VERSION, ...(up && Number.isInteger(status.record?.port) ? { port: status.record.port } : {}), ...(status.outdated ? { outdated: true } : {}),
+      ...(up && status.health?.filesGone ? { filesGone: true } : {}) };
   };
+  // How many things wait for the owner, and only that: what they say (the task a client handed over, a question of an
+  // agent) is read in the workbench, and is not sent into the browser for a number the extension shows.
+  // (Counted up to a few hundred of each: twenty tasks of a client alone may wait at once, beside what agents ask.)
   const pending = async () => {
-    const [approvals, inputs] = await Promise.all([client.call('approval.list', { status: 'pending', limit: 20 }), client.call('input.list', { status: 'pending', limit: 20 })]);
-    const items = [...approvals.items.map(item => ({ kind: 'approval', id: item.id, summary: String(item.summary || 'An agent asks for permission').slice(0, 200) })),
-      ...inputs.items.map(item => ({ kind: 'input', id: item.id, summary: String(item.details?.questions?.[0]?.question || item.summary || 'An agent asks a question').slice(0, 200) }))];
-    return { count: items.length, items };
+    const [approvals, inputs] = await Promise.all([client.call('approval.list', { status: 'pending', limit: 200 }), client.call('input.list', { status: 'pending', limit: 200 })]);
+    return { count: approvals.items.length + inputs.items.length };
   };
 
   // Everything the runtime asks of the browser while it runs: one reader, asking again as soon as it was answered.
@@ -76,9 +108,17 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
     if (polling || !extension) return;
     polling = true;
     try {
-      linkId = (await client.call('chrome.attach', { browser: extension.browser, extension: extension.version, methods: extension.methods })).linkId;
+      standing = null; toldPaused = null;
+      // (paused: what the owner chose in the panel, where the extension has read it by now. Not yet known counts as
+      // not paused: the extension says it right after, and what it says while the link is being made is said to the
+      // runtime once the link is there.)
+      const paused = extension.paused === true;
+      linkId = (await client.call('chrome.attach', { browser: extension.browser, extension: extension.version, methods: extension.methods, ...(paused ? { paused: true } : {}) })).linkId;
+      toldPaused = paused;
       while (!signal.aborted && linkId) {
-        const { calls } = await client.call('chrome.next', { linkId, waitMs: 25000 }, { timeoutMs: 40000 });
+        await tellPause();
+        const answer = await client.call('chrome.next', { linkId, waitMs: 25000 }, { timeoutMs: 40000 }), calls = answer.calls || [];
+        stands(answer);
         for (const call of calls) {
           if (!send({ type: 'call', id: call.id, method: call.method, params: call.params })) {
             await client.call('chrome.result', { linkId, id: call.id, ok: false, error: { code: 'invalid_input', message: 'This request is larger than a browser accepts in one message.' } }).catch(() => {});
@@ -94,7 +134,12 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
     while (!signal.aborted) {
       try {
         const now = await runtime();
-        if (running === null || now.running !== running.running || now.version !== running.version) { running = now; if (extension) send({ type: 'event', name: 'runtime.status', data: now }); }
+        // (Also where only the port is another: a runtime of the same version that was started again elsewhere.)
+        if (running === null || now.running !== running.running || now.version !== running.version || now.port !== running.port || now.filesGone !== running.filesGone) { running = now; if (extension) send({ type: 'event', name: 'runtime.status', data: now }); }
+        // This program itself was replaced on disk (an update of DevMate): the browser is left, so that it starts the
+        // new one. A host is started once and lives as long as the browser does; one that stayed kept speaking for a
+        // DevMate that is not installed any more, and what the new one knows (a port, a refusal) was not passed on.
+        if (replaced()) { log('this program was replaced by an update; ending, so that the browser starts the new one'); leave(); return; }
         if (now.running) {
           if (!polling) void work();
           if (extension && Date.now() - lastPending >= pendingMs) {
@@ -121,6 +166,13 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
         return answer(true, running);
       }
       if (message.action === 'workbench') return answer(true, { url: await client.workbenchUrl() });
+      if (message.action === 'prefer') {
+        // "Use this browser", from the panel of this browser, about this browser's own link and no other.
+        if (!linkId) return answer(false, { code: 'not_running', message: 'DevMate is not running, or this browser is not connected to it yet.' });
+        const now = await client.call('chrome.prefer', { linkId });
+        stands(now);
+        return answer(true, { current: now.current === true, browsers: now.browsers });
+      }
       if (message.action === 'mcpUrl') {
         // The address the owner pastes into a client in the cloud, as "devmate mcp-url" prints it: the public route
         // where there is one, and only otherwise the address that works on this computer alone. scope says which.
@@ -139,7 +191,8 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
     if (!message || typeof message !== 'object') return;
     if (message.type === 'hello') {
       extension = { version: String(message.extension || '').slice(0, 40), browser: String(message.browser || '').slice(0, 100),
-        methods: Array.isArray(message.methods) ? message.methods.filter(name => typeof name === 'string' && name.length <= 80).slice(0, 200) : [] };
+        methods: Array.isArray(message.methods) ? message.methods.filter(name => typeof name === 'string' && name.length <= 80).slice(0, 200) : [],
+        ...(typeof message.paused === 'boolean' ? { paused: message.paused } : {}) };
       running = await runtime().catch(() => ({ running: false, version: VERSION }));
       send({ type: 'ready', protocol: PROTOCOL, runtime: running });
       if (running.running && !polling) void work();
@@ -149,10 +202,16 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
       const outcome = size > MAX_RESULT_BYTES ? { ok: false, error: { code: 'browser_error', message: 'The browser\'s answer is ' + Math.round(size / 1048576) + ' MiB, more than DevMate takes in one answer. Ask for less.' } }
         : message.ok === true ? { ok: true, result: message.result } : { ok: false, error: { code: String(message.error?.code || 'browser_error').slice(0, 80), message: String(message.error?.message || 'The browser could not do this.').slice(0, 2000) } };
       await client.call('chrome.result', { linkId, id: message.id, ...outcome }).catch(error => log('result: ' + (error?.message || error)));
+    } else if (message.type === 'state') {
+      // The owner paused this browser in its panel, or lets DevMate use it again: the runtime turns to another
+      // browser that is not paused, where there is one.
+      if (!extension || typeof message.paused !== 'boolean') return;
+      extension.paused = message.paused;
+      await tellPause();
     } else if (message.type === 'request') await asked(message);
   }
 
-  const closed = new Promise(resolve => { input.once('end', resolve); input.once('close', resolve); input.once('error', resolve); });
+  const closed = new Promise(resolve => { leave = resolve; input.once('end', resolve); input.once('close', resolve); input.once('error', resolve); });
   input.on('data', frames(message => { void received(message).catch(error => log('message: ' + (error?.message || error))); }, error => log(error.message)));
   void watch();
   await closed;
@@ -160,16 +219,43 @@ export async function serveChromeHost({ origin, input, output, client, pollMs = 
   // The browser is gone: the runtime is told, and keeps running.
   if (linkId) await client.call('chrome.detach', { linkId }, { timeoutMs: 3000 }).catch(() => {});
   client.dispose?.();
+  // Nothing more is read. Where this program leaves by itself the browser still holds its end open, and an input that
+  // is listened to keeps a process alive: it stayed, served nobody, and the extension went on showing "connected".
+  input.removeAllListeners('data'); input.pause?.(); input.destroy?.();
 }
 
 /** The program itself: devmate chrome-host <origin> [--parent-window=<n>] [--instance <directory>], as a browser starts it. */
-export async function chromeHostMain(argv, { stdin = process.stdin, stdout = process.stdout, stderr = process.stderr } = {}) {
+export async function chromeHostMain(argv, { stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, program = process.argv[1] || fileURLToPath(import.meta.url) } = {}) {
   const origin = argv.find(word => word.startsWith('chrome-extension://')) || '';
   const at = argv.indexOf('--instance'), instanceRoot = at >= 0 ? argv[at + 1] : undefined;
   const { createHostClient } = createRequire(import.meta.url)('./host-client.cjs');
+  // Whether the program a browser would start now is another than this one. Two ways an update goes: the file this
+  // one was started from is written anew (a global install, a checkout), or what the browser starts is made another
+  // file (an editor's extension is installed into a folder of its own for every version, and a start of the runtime
+  // writes down which program the browser starts from then on). Either has to be so at two looks in a row: an update
+  // writes for a while. A file that is merely gone, with nothing in its place, says nothing: the browser could start
+  // no other.
+  const same = (one, other) => { const [a, b] = [one, other].map(file => path.resolve(file)); return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b; };
+  const registered = path.join(instanceDirectory(instanceRoot), 'chrome', 'registration.json');
+  const mark = () => {
+    let started = null, elsewhere = '';
+    try { const stat = fs.statSync(program); started = stat.mtimeMs + ':' + stat.size; } catch { /* gone */ }
+    try { const now = JSON.parse(fs.readFileSync(registered, 'utf8')).cli; if (typeof now === 'string' && !same(now, program) && fs.statSync(now).isFile()) elsewhere = now; } catch { /* none registered, or not there */ }
+    return { started, elsewhere };
+  };
+  const first = mark();
+  let last = first;
+  const replaced = () => {
+    // (Only what changed after this program started: a registration that named another program from the start, one
+    // written by hand or left half done, would otherwise end every host at its first looks, and nothing mends it.)
+    const now = mark(), other = (now.started !== null && now.started !== first.started) || (now.elsewhere !== '' && now.elsewhere !== first.elsewhere);
+    const settled = other && now.started === last.started && now.elsewhere === last.elsewhere;
+    last = now;
+    return settled;
+  };
   try {
     // The Node that runs this program is the one a start uses.
-    await serveChromeHost({ origin, input: stdin, output: stdout, client: createHostClient({ ...(instanceRoot ? { instanceRoot } : {}), nodePath: process.execPath }),
+    await serveChromeHost({ origin, input: stdin, output: stdout, replaced, client: createHostClient({ ...(instanceRoot ? { instanceRoot } : {}), nodePath: process.execPath }),
       log: line => { try { stderr.write('devmate chrome-host: ' + line + '\n'); } catch {} } });
     return 0;
   } catch (error) {

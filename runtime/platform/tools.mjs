@@ -13,16 +13,33 @@ export function hardenExecutableSearch(env = process.env) {
   return env;
 }
 
+// Whether there is a program to start at this path. A file is one. On Windows so is a name the system keeps on PATH
+// for an app that came from the Store or as a package (an app execution alias: `winget install Microsoft.PowerShell`
+// gives pwsh.exe that way). Such a name is a link only Windows follows: asked about as a file it is refused (EACCES),
+// and started it runs. Anything else that cannot be asked about is no program here, and never a reason to stop
+// looking: a search of PATH that threw took the whole runtime down with it at its start.
+// Not every such name is a program, though. Where no Python is installed Windows keeps python.exe and python3.exe
+// there all the same: they open the Store, or say that Python was not found. Those are passed over, so that "there
+// is no Python" stays what is said, and nothing opens a window on the owner's screen.
+const PLACEHOLDER = /[\\/]AppInstallerPythonRedirector\.exe$/i;
+export function startable(file) {
+  try { return fs.statSync(file, { throwIfNoEntry: false })?.isFile() === true; }
+  catch {
+    if (process.platform !== 'win32') return false;
+    try { return fs.lstatSync(file).isSymbolicLink() && !PLACEHOLDER.test(fs.readlinkSync(file)); } catch { return false; }
+  }
+}
+
 /** cloudflared where its installers put it, or on PATH. Null when it is not on this computer. */
 export function findCloudflared(env = process.env) {
   const usual = process.platform === 'win32' ? ['C:\\Program Files (x86)\\cloudflared\\cloudflared.exe', 'C:\\Program Files\\cloudflared\\cloudflared.exe']
     : ['/opt/homebrew/bin/cloudflared', '/usr/local/bin/cloudflared', '/usr/bin/cloudflared'];
-  return findOnPath('cloudflared', env) || usual.find(file => fs.statSync(file, { throwIfNoEntry: false })?.isFile()) || null;
+  return findOnPath('cloudflared', env) || usual.find(startable) || null;
 }
 
 /** Find an executable on PATH only (never the working directory) and return its absolute path. */
 export function findOnPath(name, env = process.env) {
-  if (path.isAbsolute(name)) return fs.statSync(name, { throwIfNoEntry: false })?.isFile() ? name : null;
+  if (path.isAbsolute(name)) return startable(name) ? name : null;
   // Native executables only: a .cmd or .bat shim cannot be started without a shell.
   const extensions = process.platform === 'win32' ? ['.exe', '.com'] : [''];
   for (const directory of (env.PATH || env.Path || '').split(path.delimiter)) {
@@ -30,7 +47,7 @@ export function findOnPath(name, env = process.env) {
     if (!clean || !path.isAbsolute(clean)) continue;
     for (const extension of extensions) {
       const candidate = path.join(clean, name + extension);
-      if (fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) return candidate;
+      if (startable(candidate)) return candidate;
     }
   }
   return null;
@@ -43,8 +60,7 @@ export function findOnPath(name, env = process.env) {
 const OFFERABLE = new Set(['rg']);
 const offered = new Map();
 const usable = (name, file) => typeof file === 'string' && path.isAbsolute(file) &&
-  path.basename(file).toLowerCase() === name + (process.platform === 'win32' ? '.exe' : '') &&
-  !!fs.statSync(file, { throwIfNoEntry: false })?.isFile();
+  path.basename(file).toLowerCase() === name + (process.platform === 'win32' ? '.exe' : '') && startable(file);
 
 /** Accept an editor's own copy of a tool. Given a directory, the copy is remembered there for a start without an editor. */
 export function offerTool(name, file, rememberIn) {

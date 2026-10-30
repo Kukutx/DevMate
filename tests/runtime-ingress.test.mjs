@@ -45,7 +45,12 @@ test('the public ingress port serves only MCP and never the owner control interf
   }
   // A proxy that rewrites Host to loopback reaches nothing: neither listener trusts it.
   assert.equal((await request(runtime.ingressPort, '/mcp', { headers: { host: '127.0.0.1:' + runtime.ingressPort } })).status, 421);
-  assert.equal((await request(runtime.ingressPort, '/mcp', { headers: { host: 'attacker.example' } })).status, 421);
+  // The refusal says which host the request named and what a proxy has to pass on, and not the address itself:
+  // without sign-in that address is all that keeps a stranger out, and a page of any site can ask this port.
+  const foreign = await request(runtime.ingressPort, '/mcp', { headers: { host: 'attacker.example' } });
+  assert.equal(foreign.status, 421);
+  assert.equal(foreign.json.error.message, 'This request names the host attacker.example, which is not the public address of this DevMate (devmate mcp-url shows it). A proxy in front of DevMate has to pass the public host name on: nginx "proxy_set_header Host $host;", Apache "ProxyPreserveHost On".');
+  assert.equal(foreign.text.split(publicHost).length, 1, 'the public host is nowhere in the answer');
   const listed = await request(runtime.ingressPort, '/mcp', { method: 'OPTIONS', headers: viaProxy });
   assert.equal(listed.status, 204, 'MCP itself is served for the configured public host');
 });
@@ -205,7 +210,10 @@ test('the ingress answers a quick tunnel only under the address the tunnel holds
   // The host name of a quick tunnel is visible to anyone who watches DNS. What opens the endpoint is the rest of the address.
   assert.match(keyPath, /^\/mcp\/[A-Za-z0-9_-]{32}$/);
   const ask = (host, pathname = keyPath) => request(runtime.ingressPort, pathname, { method: 'OPTIONS', headers: { host } });
-  assert.equal((await ask('first-fixture.trycloudflare.com')).status, 421, 'no address yet: nothing is served');
+  const early = await request(runtime.ingressPort, keyPath, { headers: { host: 'first-fixture.trycloudflare.com' } });
+  assert.equal(early.status, 421, 'no address yet: nothing is served');
+  // And said as that: there is no public address and no proxy to speak of yet.
+  assert.equal(early.json.error.message, 'This request names the host first-fixture.trycloudflare.com. This DevMate has no public address at the moment, so nothing is answered on this port under that name (the quick tunnel has not been given its address yet: try again in a few seconds).');
   address = 'https://first-fixture.trycloudflare.com' + keyPath;
   assert.equal((await ask('first-fixture.trycloudflare.com')).status, 204);
   assert.equal((await ask('someone-else.trycloudflare.com')).status, 421);

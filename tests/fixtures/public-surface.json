@@ -54,6 +54,7 @@
         "engine",
         "name",
         "projectId",
+        "query",
         "serverId",
         "summary"
       ],
@@ -198,6 +199,8 @@
     "operations_list": {
       "parameters": [
         "name",
+        "names",
+        "query",
         "summary"
       ],
       "required": [],
@@ -306,6 +309,7 @@
         "args",
         "command",
         "cwd",
+        "env",
         "file",
         "interactive",
         "projectId",
@@ -498,6 +502,7 @@
     },
     "workspace_write": {
       "parameters": [
+        "append",
         "expectedSha256",
         "overwrite",
         "path",
@@ -547,13 +552,17 @@
     "chrome.attach",
     "chrome.detach",
     "chrome.next",
+    "chrome.prefer",
     "chrome.result",
+    "chrome.state",
     "chrome.status",
     "connection.restart",
     "connection.start",
     "connection.status",
     "connection.stop",
     "connection.verify",
+    "delegation.read",
+    "delegation.update",
     "delivery.list",
     "editor.context",
     "editor.diagnostics",
@@ -600,6 +609,7 @@
     "reference.remove",
     "runtime.doctor",
     "runtime.metrics",
+    "runtime.now",
     "runtime.report",
     "runtime.stop",
     "secret.list",

@@ -78,7 +78,9 @@ export function serverInstructions(service, surface = 'generic') {
     'shell_run executes ' + service.processes.shell.label + ' on ' + process.platform + ': tests, builds, package managers and every Git write. A command still running when the call returns keeps running; follow it with process_read and stop servers with process_stop.',
     surface === 'gpt' ? null : 'workspace_patch changes several places or files in one call, all of it or none: a "*** Begin Patch" envelope or a unified diff.',
     'editor_diagnostics lists the errors the user\'s editor already reports.',
-    'agents_delegate hands a whole task to a coding agent installed here and returns its result or an agentId for agents_result. Do the work yourself unless the user asks for delegation.',
+    // Not offered where the owner switched delegation off. That the owner allows each task first is said by the tool
+    // itself and by its answer: these instructions have no room left for it.
+    service.delegation === 'off' ? null : 'agents_delegate hands a whole task to a coding agent installed here and returns its result or an agentId for agents_result. Do the work yourself unless the user asks for delegation.',
     'capability_list lists engines: the owner\'s browser (engine "chrome": bookmarks, tabs, history; chrome.page.* debugs pages: console, network, elements, script), browser automation, Godot, Obsidian. capability_query reads, capability_call changes.',
     'A name with a dot is an operation: operations_query runs those that only read, operations_call the others, operations_list {summary:true} lists them all.',
     // The owner's own choice (access.update, at their computer). Without it these stay the owner's to do there.
@@ -90,7 +92,9 @@ export function serverInstructions(service, surface = 'generic') {
     : 'No folder is shared yet. Sharing one is done by the user on their computer: by opening it in an editor that has DevMate, or with: devmate project add <folder>. Ask them to.';
   const budget = INSTRUCTION_LIMIT - lead.length - rest.length - 2;
   for (const [index, project] of projects.entries()) {
-    const entry = ' ' + project.id + ' = ' + project.name + ' (' + project.root + ', ' + project.access + ');';
+    // A folder that was moved or deleted since it was shared is named as that, not offered as something to work in.
+    // (As it was last seen: this is written for every request, and the file system is not asked each time.)
+    const entry = ' ' + project.id + ' = ' + project.name + ' (' + project.root + ', ' + (service.folderMissing(project) ? 'folder not there' : project.access) + ');';
     if (known.length + entry.length > budget - 40) { known += ' and ' + (projects.length - index) + ' more (project_list).'; break; }
     known += entry;
   }
@@ -245,7 +249,8 @@ export function createMcpServer(service, context, { surface = 'generic', listing
   // shared, and the person decides both at their computer.
   registerWorkbench(server, {
     call: (name, input) => service.call(name, input, context),
-    snapshot: input => service.snapshot(input, context)
+    snapshot: input => service.snapshot(input, context),
+    resolveProjectReference: value => service.resolveProjectReference(value, context)
   });
   server.registerResource('project-file', new ResourceTemplate('devmate://project/{projectId}/file/{+path}', { list: undefined }),
     { title: 'DevMate project file', mimeType: 'text/plain' }, async uri => {

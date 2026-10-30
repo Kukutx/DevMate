@@ -4,11 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Module,{createRequire} from 'node:module';
-import {spawnSync} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {VERSION} from '../runtime/version.mjs';
+import {EXTENSION_ORIGIN} from '../runtime/chrome.mjs';
+import {frame,frames} from '../runtime/chrome-host.mjs';
 import {buildRuntimeCandidate} from '../scripts/runtime-build.mjs';
 const require=createRequire(import.meta.url);
-test('candidate is self contained and its Obsidian main materializes a verified native runtime without starting it',async t=>{
+test('candidate is self contained and its Obsidian main materializes a verified native runtime without starting it',{timeout:180000},async t=>{
   const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-candidate 中文 '));t.after(()=>fs.rmSync(temporary,{recursive:true,force:true,maxRetries:5,retryDelay:100}));
   const out=path.join(temporary,'package'),instance=path.join(temporary,'instance');
   const manifestPath=path.join(temporary,'package.fixture.json'),pluginManifestPath=path.join(temporary,'plugin.fixture.json');
@@ -47,4 +49,53 @@ test('candidate is self contained and its Obsidian main materializes a verified 
   assert.equal(embeddedCli.status,0,embeddedCli.stderr);
   const hostClient=require(path.join(assetRoot,'runtime','host-client.cjs')).createHostClient({instanceRoot:instance});
   assert.equal((await hostClient.status()).running,false);hostClient.dispose();
+
+  // The program a browser starts, as it is built, ends when an update replaced it: the process itself, while the
+  // browser still holds its end of the connection open. (It "left" and stayed: it served nobody, and the extension
+  // went on showing that it was connected.) Two ways an update goes are tried, each with a host of its own.
+  const program=path.join(out,'runtime','cli.mjs');
+  const host=where=>{
+    const child=spawn(process.execPath,[program,'chrome-host',EXTENSION_ORIGIN,'--parent-window=0','--instance',where],{stdio:['pipe','pipe','pipe'],windowsHide:true});
+    const heard=[];let said='';
+    child.stdout.on('data',frames(message=>heard.push(message)));child.stderr.on('data',chunk=>{said+=chunk;});
+    child.stdin.write(frame({type:'hello',protocol:1,extension:VERSION,browser:'A browser',methods:[]}));
+    const ended=new Promise(resolve=>child.on('close',code=>resolve(code)));
+    return{child,heard,ended,said:()=>said};
+  };
+  const within=(promise,ms,what)=>{let timer;return Promise.race([promise,new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(new Error(what)),ms);})]).finally(()=>clearTimeout(timer));};
+  const until=async(check,what)=>{for(const end=Date.now()+15000;Date.now()<end;await new Promise(resolve=>setTimeout(resolve,50)))if(check())return;throw new Error('Timed out waiting for '+what);};
+  // 1. The file it was started from is written anew (a global install does that).
+  const rewritten=host(path.join(temporary,'instance-rewritten'));
+  t.after(()=>{try{rewritten.child.kill();}catch{}});
+  await until(()=>rewritten.heard.some(message=>message.type==='ready'),'the host to be ready');
+  await new Promise(resolve=>setTimeout(resolve,2500));
+  assert.equal(rewritten.child.exitCode,null,'it serves for as long as its program is the one that was started');
+  const later=new Date(Date.now()+60000);fs.utimesSync(program,later,later);
+  assert.equal(await within(rewritten.ended,20000,'the host did not end after its program was written anew: '+rewritten.said()),0);
+  assert.match(rewritten.said(),/this program was replaced by an update/);
+  // 2. What the browser starts is another file now (an editor installs every version into a folder of its own, and
+  // a start of the runtime writes down which program the browser starts from then on).
+  const moved=path.join(temporary,'instance-moved'),newer=path.join(temporary,'newer-cli.mjs');
+  fs.mkdirSync(path.join(moved,'chrome'),{recursive:true});fs.writeFileSync(newer,'');
+  fs.writeFileSync(path.join(moved,'chrome','registration.json'),JSON.stringify({node:process.execPath,cli:program}));
+  const elsewhere=host(moved);
+  t.after(()=>{try{elsewhere.child.kill();}catch{}});
+  await until(()=>elsewhere.heard.some(message=>message.type==='ready'),'the second host to be ready');
+  await new Promise(resolve=>setTimeout(resolve,2500));
+  assert.equal(elsewhere.child.exitCode,null,'registered as the program it is, it stays');
+  fs.writeFileSync(path.join(moved,'chrome','registration.json'),JSON.stringify({node:process.execPath,cli:newer}));
+  assert.equal(await within(elsewhere.ended,20000,'the host did not end after another program was registered: '+elsewhere.said()),0);
+  // A program that is registered and is not there replaces nothing: the browser could start no other. Nor does one
+  // that was registered already when this host started (a registration written by hand, or left half done): only a
+  // change after the start is an update, and every host would end at its first looks otherwise.
+  const kept=path.join(temporary,'instance-kept'),before=path.join(temporary,'instance-before');
+  for(const [where,cli] of [[kept,path.join(temporary,'no-such-cli.mjs')],[before,newer]]){fs.mkdirSync(path.join(where,'chrome'),{recursive:true});fs.writeFileSync(path.join(where,'chrome','registration.json'),JSON.stringify({node:process.execPath,cli}));}
+  const staying=host(kept),registered=host(before);
+  t.after(()=>{for(const one of [staying,registered])try{one.child.kill();}catch{}});
+  await until(()=>staying.heard.some(message=>message.type==='ready')&&registered.heard.some(message=>message.type==='ready'),'the last two hosts to be ready');
+  await new Promise(resolve=>setTimeout(resolve,6500));
+  assert.equal(staying.child.exitCode,null,'a registered program that is not there replaces nothing: '+staying.said());
+  assert.equal(registered.child.exitCode,null,'another program registered from the start is no update: '+registered.said());
+  // And it ends, as ever, when the browser closes its end.
+  for(const one of [staying,registered]){one.child.stdin.end();assert.equal(await within(one.ended,15000,'the host did not end when the browser left'),0);}
 });

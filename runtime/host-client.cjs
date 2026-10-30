@@ -39,19 +39,29 @@ function createHostClient(options = {}) {
   const factory = () => import('./client.mjs').then(module => overrides => module.createRuntimeClient({ ...settings, ...overrides }));
   const client = () => clientPromise ||= factory().then(create => create());
   const version = () => versionPromise ||= import('./version.mjs');
+  // The port a start from this entry asks for. An entry passes one only where the owner set it in its settings, and
+  // then it is their word, whatever number it is (the usual one too: that is how they go back to it). Otherwise none
+  // is named, and the launcher takes the port the instance ran on last: the runtime may have been started elsewhere
+  // (a terminal, another entry) on a port this entry's settings do not name, and a start or a restart from here moved
+  // it, away from the clients on this computer and the route of a tunnel set to it.
+  const startPort = () => options.port;
   return {
     async start() {
       // An editor's own executable is Electron, not Node: use the configured Node, else the one on PATH.
       let node;
-      try { node = resolveNodeRuntime({ preferredExecutable: options.nodePath || '', processExecutable: '' }); }
+      try { node = (options.resolveNode || resolveNodeRuntime)({ preferredExecutable: options.nodePath || '', processExecutable: '' }); }
       catch (cause) {
-        const error = new Error('DevMate needs Node.js 24 or newer and did not find it. Install it from https://nodejs.org, or enter the path of the Node executable in the DevMate settings of this editor.');
+        // What each try said: a Node that is there but too old, or too slow to answer, is not one that is missing.
+        const said = reason => /ENOENT/.test(reason) ? 'not found' : /ETIMEDOUT/.test(reason) ? 'did not answer in time' : String(reason || 'not usable').slice(0, 120);
+        const tried = (cause.attempts || []).filter(item => item.source !== 'host').map(item => (item.source === 'configured' ? 'the one in the settings' : 'node on PATH') + ': ' + said(item.reason)).join('; ');
+        const error = new Error('DevMate needs Node.js 24 or newer and did not find one it can use' + (tried ? ' (' + tried + ')' : '') + '. Install it from https://nodejs.org, or enter the path of the Node executable in the DevMate settings of this editor.');
         error.code = 'NODE_REQUIRED';
         error.cause = cause;
         throw error;
       }
-      const launcher = await import('./launcher.mjs');
-      return launcher.startRuntime({ ...options, nodePath: node.executable, clientFactory: await factory() });
+      // (launcher: a test's own, to see what a start asks for.)
+      const launcher = options.launcher || await import('./launcher.mjs');
+      return launcher.startRuntime({ ...options, port: startPort(), nodePath: node.executable, clientFactory: await factory() });
     },
     async stop() {
       const launcher = await import('./launcher.mjs');

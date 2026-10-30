@@ -54,8 +54,9 @@ test('the allow-list is exactly what the app calls, exists in the service and ne
   // Every operation the app names is either allow-listed or local-only (and then only offered by the local page).
   const app=source('app.js'),named=[...service.operations.keys()].filter(name=>app.includes("'"+name+"'"));
   const localOnly=named.filter(name=>service.operations.get(name).localOnly);
-  assert.deepEqual(localOnly,['runtime.doctor']);
+  assert.deepEqual(localOnly,['runtime.doctor','runtime.now']);
   assert.match(app,/!bridge\.embedded && can\('runtime\.doctor'\)/);
+  assert.match(app,/!bridge\.embedded && can\('runtime\.now'\)/);
   // Everything else the app names is allow-listed, the owner's own decisions included: the service offers those to an
   // embedded workbench only when the owner chose full access, and the app shows a button only for what is offered.
   const ownDecision=name=>{const operation=service.operations.get(name);return operation.humanOnly===true||!!operation.ownerDecision;};
@@ -156,4 +157,6 @@ test('local HTML routing is explicit and never handles API or unrelated routes',
   assert.equal(await handleWorkbench({url:'/',method:'POST'},res),true);assert.equal(status,405);
   assert.equal(await handleWorkbench({url:'/workbench',method:'HEAD'},res),true);
   assert.equal(status,200);assert.equal(headers['Cache-Control'],'no-store');assert.equal(body,undefined);
+  // The page that is signed in as the owner at the computer is held in no other page's frame, and no other page keeps a hand on its window.
+  assert.deepEqual([headers['Content-Security-Policy'],headers['X-Frame-Options'],headers['Cross-Origin-Opener-Policy']],['frame-ancestors \'none\'','DENY','same-origin']);
 });

@@ -30,6 +30,17 @@ before(async()=>{if(executablePath)browser=await chromium.launch({executablePath
 after(async()=>{await browser?.close();});
 
 /** An in-memory stand-in for the service that answers like it: lists honour status, newestFirst, limit and cursor. */
+// What the owner is asked when a connected client hands a task to an agent (runtime/coordination.mjs, consent).
+// In the words the runtime gives it (tests/runtime-delegation.test.mjs holds those to the product).
+const DELEGATION_ASKS='A connected client asks codex to run a task in the project "Project One": Fix it [and 14 more characters]';
+const ALLOW_AGENT='Run it, and do not ask again for this agent while it stays connected (tasks, and what is added to a task that runs)';
+const delegationRequest=()=>({id:'approval-delegation',kind:'delegation',projectId:'p-one',agentId:'a-one',deliveryId:'delivery-001',summary:DELEGATION_ASKS,status:'pending',revision:1,
+  options:[{optionId:'allow_once',name:'Run this task'},{optionId:'allow_agent',name:ALLOW_AGENT},{optionId:'deny',name:'Do not run it'}],
+  details:{agent:'codex',model:'"gpt-large" (the client chose it)',continues:'the codex session "thread-7" (the client chose it)',project:'"Project One"',askedBy:'A connected client',characters:20,task:'Fix it\nand the tests',
+    note:'Running it uses your account with codex. Not to be asked: devmate delegation allow'}});
+// The same where the owner chose not to be asked and something else keeps the task from beginning.
+const DELEGATION_WAITS='A connected client asks codex to run a task in the project "Project One": Later';
+const WAITS_FOR='Workflow turn budget reached (2 turns). Raise it to continue: workflow.update {id:"w-one", turnBudget:<more>}.';
 function fixture() {
   const calls=[],refs=[],failures=new Map();
   const projects=[{id:'p-one',name:'Project One',root:'C:/fixture-one',access:'write',revision:1},{id:'p-two',name:'Project Two',root:'C:/fixture-two',access:'write',revision:1}];
@@ -182,12 +193,46 @@ test('real Workbench in isolated Chromium: explicit scope, files, native approva
   await page.getByRole('alert').filter({hasText:'File changed'}).waitFor();
   assert.equal(await editor.inputValue(),'unsaved conflict draft');
   // Another tab does not cost the unsaved draft, and no browser dialog is involved.
+  f.approvals.push(delegationRequest(),{...delegationRequest(),id:'approval-waits',deliveryId:'delivery-002',summary:DELEGATION_WAITS,waits:WAITS_FOR});
   await page.getByRole('tab',{name:'Approvals',exact:true}).click();
+  // (The page is drawn once its lists have come: counted before that, there is nothing yet.)
+  await page.getByRole('button',{name:'Allow once from provider',exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Cancel turn',exact:true}).count(),1,'a task that waits to be allowed has no turn to cancel: only the agent\'s own request offers that');
   await page.getByRole('button',{name:'Allow once from provider',exact:true}).click();
   await page.waitForFunction(()=>[...document.querySelectorAll('.badge')].some(x=>x.textContent==='resolved'));
   assert.equal(f.calls.find(x=>x.operation==='approval.resolve').input.optionId,'allow_once_native');
   assert.equal(await page.getByRole('button',{name:'Approve',exact:true}).count(),0);
   assert.equal(await page.getByRole('button',{name:'Allow once from provider',exact:true}).count(),0,'an answered request offers no decision any more');
+  // Whether a task of a connected client runs at all is answered here, at the computer, like any other request.
+  await page.getByRole('heading',{name:DELEGATION_ASKS,exact:true}).waitFor();
+  // What the owner agrees to is what is shown: who asks and what would run it, and the task as the text it is, line
+  // by line, not as one line of a record. The three answers are offered in their own words.
+  const waits=page.locator('[data-key="approval-delegation"]');
+  assert.equal(await waits.getByLabel('The task').textContent(),'Fix it\nand the tests');
+  // What somebody else named stands in the quotes the runtime gives it, and is marked where the client chose it. The
+  // agent's name, which may be the client's too, is in the question in quotes and nowhere on the card by itself.
+  assert.match(await waits.textContent(),/A connected client · runs with codex, model: "gpt-large" \(the client chose it\) · continues the codex session "thread-7" \(the client chose it\) · project: "Project One" · 20 characters/);
+  assert.doesNotMatch(await waits.textContent(),/First agent/);
+  assert.match(await waits.textContent(),/Running it uses your account with codex\./);
+  for(const name of ['Run this task',ALLOW_AGENT,'Do not run it'])assert.equal(await waits.getByRole('button',{name,exact:true}).count(),1,name);
+  assert.equal(await waits.getByRole('button',{name:'Cancel turn',exact:true}).count(),0);
+  // Where the owner chose not to be asked, a task that is still here says what it waits for instead; one that waits
+  // for their answer says nothing of the kind.
+  const waitsFor='You chose not to be asked (devmate delegation allow), and this task has not begun because of something else. '+WAITS_FOR+' It is let through when that is out of the way; refuse it here if it is not to run.';
+  assert.ok((await page.locator('[data-key="approval-waits"]').textContent()).includes(waitsFor));
+  assert.doesNotMatch(await waits.textContent(),/You chose not to be asked/);
+  // A yes for a task that cannot begin right now is refused with what is in the way. The owner reads that here, where
+  // they answered, and the question stays as it was, to be answered again.
+  const inTheWay='8 codex sessions are already connected. Stop one with agents.stop. This task keeps waiting for your answer: allow it once that is out of the way, or refuse it.';
+  f.failNext('approval.resolve',inTheWay,'agent_limit');
+  await waits.getByRole('button',{name:'Run this task',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:inTheWay}).waitFor();
+  assert.equal(await waits.getByRole('button',{name:'Run this task',exact:true}).count(),1,'the question is still there');
+  assert.equal(f.approvals.find(item=>item.id==='approval-delegation').status,'pending');
+  await waits.getByRole('button',{name:'Do not run it',exact:true}).click();
+  await until(()=>f.count('approval.resolve')===3,'the owner\'s answer');
+  const answered=f.calls.filter(x=>x.operation==='approval.resolve')[2].input;
+  assert.deepEqual([answered.id,answered.optionId],['approval-delegation','deny']);
   await page.getByLabel('Choose a route').selectOption('Short');
   await page.getByRole('button',{name:'Respond',exact:true}).click();
   await until(()=>f.count('input.respond')===1,'the answer');
@@ -197,7 +242,18 @@ test('real Workbench in isolated Chromium: explicit scope, files, native approva
   assert.deepEqual(errors,[]);
   mkdirSync('tmp/workbench-validation',{recursive:true});
   await page.screenshot({path:'tmp/workbench-validation/local-files.png',fullPage:true});
+  // An agent whose later tasks the owner let through says so, with how that ends; one a connected client wrote down
+  // and that has not run is said to be that, and can be started or closed by the owner here.
+  f.agents[0].delegationAllowed=true;
+  f.agents.push({id:'a-two',projectId:'p-one',workflowId:'w-one',provider:'claude',label:'Written down',status:'unstarted',capabilities:{}});
   await page.getByRole('tab',{name:'Agents',exact:true}).click();
+  const card=id=>page.locator('.item[data-key="'+id+'"]');
+  await card('a-two').waitFor();
+  assert.match(await card('a-one').textContent(),/A connected client hands this agent tasks, and adds to a task that runs \(yours among them\), without asking you, for as long as the agent stays connected\. Stop it to be asked again\./);
+  assert.match(await card('a-two').textContent(),/Written down by a connected client and not started: it starts when you allow a task of it, or resume it\./);
+  assert.doesNotMatch(await card('a-two').textContent(),/without asking you/);
+  for(const name of ['Resume','Stop'])assert.equal(await card('a-two').getByRole('button',{name,exact:true}).isDisabled(),false,name+' is offered for an agent that has not started');
+  assert.equal(await card('a-two').getByRole('button',{name:'Send',exact:true}).isDisabled(),true);
   await page.screenshot({path:'tmp/workbench-validation/local-agents.png',fullPage:true});
 });
 
@@ -233,6 +289,14 @@ test('official MCP Apps SDK runs in iframe and attaches real saved references wi
   const seen=f.count('workbench.snapshot');
   await until(()=>f.count('workbench.snapshot')>seen,'a refresh by itself while an agent is working',16000);
   assert.equal(server.streams.size,0);
+  // Inside a chat app nothing offers to allow a task a connected client handed over: that is said at the computer.
+  f.approvals.push(delegationRequest());
+  await frame.getByRole('tab',{name:'Approvals',exact:true}).click();
+  await frame.getByRole('heading',{name:DELEGATION_ASKS,exact:true}).waitFor();
+  assert.equal(await frame.locator('[data-key="approval-delegation"]').getByLabel('The task').textContent(),'Fix it\nand the tests','the task is shown there as well');
+  await frame.getByText('Whether this task runs is yours to say on your computer, in either access profile',{exact:false}).waitFor();
+  assert.equal(await frame.getByRole('button',{name:'Run this task',exact:true}).count(),0);
+  assert.equal(await frame.getByRole('button',{name:'Allow once from provider',exact:true}).count(),1,'what an agent asks in its turn is offered as before');
   assert.deepEqual(errors,[]);
 });
 
@@ -360,6 +424,11 @@ test('finding 4: inside a sandboxed host the app asks in the page, requests full
   const frame=page.frameLocator('#app');
   await frame.getByRole('heading',{name:'Workflow One',exact:true}).waitFor();
   const inner=page.frames().find(item=>item.url().endsWith('/iframe'));
+  // The page of everything that is going on is the owner's at the computer: inside a host it is not among the tabs,
+  // and the keys that move between tabs pass over it.
+  assert.equal(await frame.getByRole('tab',{name:'Now',exact:true}).count(),0);
+  await frame.getByRole('tab',{name:'Overview',exact:true}).focus();await inner.press('body','ArrowRight');
+  assert.equal(await inner.evaluate(()=>document.activeElement.textContent),'Approvals');
   // The premise of the finding: this frame cannot show a browser confirmation at all.
   assert.equal(await inner.evaluate(()=>window.confirm('blocked by the sandbox')),false);
   assert.deepEqual(errors,[],'no browser dialog was shown');
@@ -403,7 +472,9 @@ test('finding 4: inside a sandboxed host the app asks in the page, requests full
   await frame.locator('#project').selectOption('p-two');
   const question=frame.getByRole('alertdialog',{name:'Discard unsaved changes?'});
   await question.getByRole('button',{name:'Cancel',exact:true}).click();
-  assert.equal(await frame.locator('#project').inputValue(),'p-one');
+  // (The choice goes back when the answer has been taken, a moment after the click: read at once, it was now and
+  // then still the project that had been picked, and a whole run ended red for it.)
+  await until(async()=>await frame.locator('#project').inputValue()==='p-one','the choice of project to go back');
   assert.equal(await editor.inputValue(),'unsaved inside the sandbox');
   await frame.locator('#project').selectOption('p-two');
   await question.getByRole('button',{name:'Discard changes',exact:true}).click();
@@ -497,7 +568,7 @@ test('finding 5: tabs, dialogs and errors are operable by keyboard and exposed t
   const {page,errors}=await open(t,server);
   await selectScope(page);
   const tablist=page.getByRole('tablist',{name:'Workspace sections'});
-  assert.deepEqual(await tablist.getByRole('tab').allTextContents(),['Overview','Approvals','Agents','Activity','Messages','Tasks','Files','Changes','Commands','Problems','Artifacts']);
+  assert.deepEqual(await tablist.getByRole('tab').allTextContents(),['Overview','Now','Approvals','Agents','Activity','Messages','Tasks','Files','Changes','Commands','Problems','Artifacts']);
   const tabState=()=>page.evaluate(()=>({selected:[...document.querySelectorAll('[role=tab][aria-selected=true]')].map(node=>node.textContent),
     reachable:[...document.querySelectorAll('[role=tab]')].filter(node=>node.tabIndex===0).map(node=>node.textContent),
     controls:[...new Set([...document.querySelectorAll('[role=tab]')].map(node=>node.getAttribute('aria-controls')))],
@@ -507,7 +578,7 @@ test('finding 5: tabs, dialogs and errors are operable by keyboard and exposed t
   // Arrow keys move through the tabs, Home and End jump, Enter opens the focused one.
   await page.getByRole('tab',{name:'Overview',exact:true}).focus();
   await page.keyboard.press('ArrowRight');
-  assert.equal((await focused(page)).text,'Approvals');
+  assert.equal((await focused(page)).text,'Now');
   assert.deepEqual((await tabState()).selected,['Overview'],'moving the focus does not load another view');
   const ring=await page.evaluate(()=>{const style=getComputedStyle(document.activeElement);return{style:style.outlineStyle,width:style.outlineWidth,visible:document.activeElement.matches(':focus-visible')};});
   assert.deepEqual(ring,{style:'solid',width:'3px',visible:true});
@@ -515,7 +586,7 @@ test('finding 5: tabs, dialogs and errors are operable by keyboard and exposed t
   assert.equal((await focused(page)).text,'Artifacts');
   await page.keyboard.press('Home');assert.equal((await focused(page)).text,'Overview');
   await page.keyboard.press('End');assert.equal((await focused(page)).text,'Artifacts');
-  await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');
+  for(let press=0;press<7;press++)await page.keyboard.press('ArrowRight');
   assert.equal((await focused(page)).text,'Tasks');
   await page.keyboard.press('Enter');
   await page.getByRole('heading',{name:'Tasks',exact:true}).waitFor();
@@ -878,5 +949,59 @@ test('finding 6: commands, changes, files, problems, delegation, activity, conne
   assert.deepEqual(errors,[]);
   mkdirSync('tmp/workbench-validation',{recursive:true});
   for(const name of ['Overview','Changes','Commands','Activity']){await tab(name);await page.locator('#panel h2').first().waitFor();await delay(400);await page.screenshot({path:'tmp/workbench-validation/view-'+name.toLowerCase()+'.png',fullPage:true});}
+});
+test('the page of everything that is going on: what runs in any project is listed without choosing one, stopped from there, and what waits is one press away',{skip,timeout:90000},async t=>{
+  const {root,directory,service,f}=realService(t);
+  const other=path.join(directory,'another');mkdirSync(other);
+  const project=await ownerCall(service,'project.create',{root,name:'First project'}),second=await ownerCall(service,'project.create',{root:other,name:'Second project'});
+  const command=await ownerCall(service,'shell.run',{projectId:second.id,file:process.execPath,args:['-e','setInterval(()=>{},1000)'],waitMs:0});
+  const agent=service.store.create('agent',{projectId:project.id,provider:'codex',label:'A helper',status:'unstarted',capabilities:{},error:null});
+  service.store.create('approval',{projectId:project.id,agentId:agent.id,kind:'delegation',status:'pending',summary:'A connected client asks for a task '+'whose words go on and on '.repeat(12),options:[{optionId:'deny',name:'Do not run it'}]});
+  // Two browsers with the extension: the one that connected last is paused by the owner, so the other is the one in use.
+  // (Each asks for work once, as its host does as soon as it is attached.)
+  for(const browser of [{browser:'Google Chrome'},{browser:'Microsoft Edge',paused:true}]){const {linkId}=await ownerCall(service,'chrome.attach',{...browser,extension:'4.0.6',methods:['tabs.list']});await ownerCall(service,'chrome.next',{linkId,waitMs:1});}
+  // A client that came through the public address and changed a file, and one that only looked.
+  await service.call('workspace.write',{projectId:project.id,path:'from-a-client.md',text:'x'},{id:'owner',via:'address',client:'You'});
+  await service.call('project.list',{},{id:'owner',via:'local'});
+  const server=await serverFixture(f);t.after(server.close);
+  service.store.on('event',event=>server.push(event));
+  const {page,errors}=await open(t,server,{viewport:{width:1380,height:1000}});
+  await page.getByRole('heading',{name:'Your projects, together'}).waitFor();
+  // No project is chosen, and the page is there all the same.
+  await page.getByRole('tab',{name:'Now',exact:true}).click();
+  await page.getByRole('heading',{name:'Now',exact:true}).waitFor();
+  const part=title=>page.locator('section.panel').filter({has:page.getByRole('heading',{name:new RegExp('^'+title)})});
+  await part('Running commands').getByText('Second project').waitFor();
+  assert.match(await part('Running commands').locator('.item strong').textContent(),/setInterval/);
+  assert.equal(await part('Waiting for your answer').locator('.item').count(),1);
+  assert.match(await part('Waiting for your answer').locator('.item').textContent(),/A connected client asks for a task[\s\S]*First project · A helper/);
+  assert.equal(await part('Agents at work').getByText('No agent is at work.').count(),1,'an agent that was written down and not started is not at work');
+  const counts=await page.locator('.cards .card').evaluateAll(cards=>Object.fromEntries(cards.map(card=>[card.querySelector('.card-title').textContent,card.querySelector('.metric').textContent])));
+  assert.deepEqual(counts,{'Waiting for you':'1','Commands running':'1','Agents at work':'0','Jobs':'0','Editor windows':'0','Browsers':'2'});
+  const attached=await part('Who is attached').locator('dl').textContent();
+  assert.ok(attached.includes('BrowsersGoogle Chrome, extension 4.0.6, in use; Microsoft Edge, extension 4.0.6, not in use, paused by you'),attached);
+  // The row's actions keep their width beside a long title: a button is one line, not a column of letters.
+  const stop=part('Running commands').getByRole('button',{name:'Stop',exact:true});
+  for(const name of ['Stop','Open','Answer']){const box=await page.locator('#panel .item').getByRole('button',{name,exact:true}).boundingBox();assert.ok(box.width>box.height&&box.height<48,'the '+name+' button is one line: '+JSON.stringify(box));}
+  // Who has been here, and who asked for each change: the client by its name and its way, the owner as themselves.
+  const clients=await part('Clients since DevMate started').locator('.entry').allTextContents();
+  assert.equal(clients.length,2);
+  for(const part of ['A client that gave no name','on this computer','1 call, 0 of them changed something'])assert.ok(clients[0].includes(part),part+' in '+clients[0]);
+  for(const part of ['"You"','through the public address','1 call, 1 of them changed something','last: workspace.write at '])assert.ok(clients[1].includes(part),part+' in '+clients[1]);
+  const changes=await part('Recent changes').locator('.entry').allTextContents();
+  assert.ok(changes[0].startsWith('workspace.write"You", through the public address · First project'),'a client that calls itself You is shown as a name, in quotes: '+changes[0]);
+  assert.ok(changes[1].startsWith('shell.runYou, at this computer · Second project'),changes[1]);
+  assert.ok(changes.at(-1).startsWith('project.createYou, at this computer'),changes.at(-1));
+  // Stopped from here, with the operation that stops a command anywhere.
+  await stop.click();
+  await part('Running commands').getByText('No command is running.').waitFor();
+  await until(()=>service.processes.list(second.id).items.find(item=>item.id===command.id).status!=='running','the command to have ended');
+  await part('Recent changes').locator('.entry').first().filter({hasText:'process.stop'}).waitFor();
+  // What waits is answered where it always is: one press chooses its project and opens that page.
+  await part('Waiting for your answer').getByRole('button',{name:'Answer',exact:true}).click();
+  await page.getByRole('heading',{name:'Approvals and questions'}).waitFor();
+  assert.equal(await page.locator('#project').inputValue(),project.id);
+  await page.getByText('A connected client asks for a task').first().waitFor();
+  assert.deepEqual(errors,[]);
 });
 });

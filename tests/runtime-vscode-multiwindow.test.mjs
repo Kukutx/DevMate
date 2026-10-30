@@ -25,7 +25,9 @@ function fakeWindow(instanceRoot, name, roots, { share = 'Read and write', setti
     workspace:{
       name,isTrusted:true,
       workspaceFolders:roots.map(root=>({name:path.basename(root),uri:{scheme:'file',fsPath:root}})),
-      getConfiguration:()=>({get:(key,fallback)=>key==='runtimeInstanceDirectory'?instanceRoot:Object.hasOwn(settings,key)?settings[key]:fallback}),
+      getConfiguration:()=>({get:(key,fallback)=>key==='runtimeInstanceDirectory'?instanceRoot:Object.hasOwn(settings,key)?settings[key]:fallback,
+        // (What the owner set, as VS Code says it: the settings given here are the user's.)
+        inspect:key=>({key,...(Object.hasOwn(settings,key)?{globalValue:settings[key]}:{})})}),
       onDidChangeWorkspaceFolders:()=>({dispose(){}}),
       onDidChangeConfiguration:listener=>{changed.push(listener);return{dispose(){}};},
       onDidGrantWorkspaceTrust:listener=>{trusted.push(listener);return{dispose(){}};}
@@ -42,13 +44,15 @@ function fakeWindow(instanceRoot, name, roots, { share = 'Read and write', setti
     Uri:{parse:value=>value},env:{openExternal:async()=>true}
   };
   let localClient=client;
+  // What each client of this window was made with.
+  const made=[];
   const entry=createVscodeRuntimeEntry(vscode,client?{client}:{clientFactory:options=>{
-    localClient=createHostClient({...options,...hostOptions});return localClient;
+    made.push(options);localClient=createHostClient({...options,...hostOptions});return localClient;
   }});
   const context={subscriptions:[],workspaceState:{get:(key,fallback)=>memory.has(key)?memory.get(key):fallback,update:async(key,value)=>{memory.set(key,value);}}};
   const set=(key,value)=>{settings[key]=value;for(const listener of changed)listener({affectsConfiguration:name=>name==='devMate'||name==='devMate.'+key});};
   const trust=()=>{vscode.workspace.isTrusted=true;for(const listener of trusted)listener();};
-  return {entry,commands,context,asked,shown,memory,statusBars,providers,set,trust,get client(){return localClient;},vscode,
+  return {entry,commands,context,asked,shown,memory,statusBars,providers,set,trust,made,get client(){return localClient;},vscode,
     activate:()=>entry.activate(context),bound:()=>until(()=>entry.attachment?.selectedProjectId,name+' bound its folder')};
 }
 async function freePort() {
@@ -87,6 +91,19 @@ test('two real VS Code host instances attach independent windows to the same loc
   assert.equal((await f.call('window.list')).items.length,1);
   assert.equal((await windows[1].client.call('project.list')).items[0].id,attachments[1].selectedProjectId);
   assert.equal(f.runtime.health.status,'ready');
+});
+
+test('a window names a local port only where its owner set one, the usual one too; otherwise a start takes the port the runtime ran on last',async t=>{
+  // The setting's default is 8788, and asked for its value VS Code says 8788 whether the owner wrote it or not. Only
+  // a value the owner set is their word: set back to 8788, it is how they go back to the usual port.
+  const base=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-windows-port-')),instanceRoot=path.join(base,'instance');
+  t.after(()=>fs.rmSync(base,{recursive:true,force:true,maxRetries:5,retryDelay:100}));
+  for(const [settings,port] of [[{},undefined],[{runtimePort:null},undefined],[{runtimePort:8788},8788],[{runtimePort:9123},9123]]){
+    const window=fakeWindow(instanceRoot,'Ports',[],{settings});
+    await window.activate();
+    assert.equal(window.made.at(-1).port,port,JSON.stringify(settings));
+    await window.entry.deactivate();
+  }
 });
 
 test('with sharing set to ask, a window shares a folder only after its user agrees, and remembers "Don\'t share"',async t=>{
@@ -226,7 +243,49 @@ test('with auto-start a runtime that died is brought back, a bounded number of t
   manual.state.crashed=true;
   await plain.entry.refresh();
   assert.equal(manual.state.starts,0,'without auto-start nothing is started on the user\'s behalf');
+  // What is not started again is said as what happened: a runtime that ended by itself is not one somebody stopped.
+  assert.equal(plain.statusBars[0].text,'$(warning) DevMate');assert.match(plain.statusBars[0].tooltip,/^DevMate runtime: stopped unexpectedly\nClick to start$/);
   await plain.entry.deactivate();
+});
+
+test('a runtime that holds its instance and does not answer for a moment is busy, not stopped: the window keeps what it has',async()=>{
+  // It was read as "not running": the window let go of its folders, and the editor\'s own tools lost the endpoint,
+  // until the next look a few seconds later attached everything anew.
+  const client=scripted(),window=fakeWindow('unused','Busy',[process.cwd()],{client});
+  await window.activate();
+  await window.commands.get('devMate.runtime.start')();
+  assert.notEqual(window.entry.attachment,null);assert.equal(window.statusBars[0].text,'$(plug) DevMate');
+  const attached=client.calls.filter(([name])=>name==='window.attach').length,answers=client.status;
+  client.status=async()=>({state:'unavailable',running:false,processAlive:true,owner:{pid:1}});
+  await window.entry.refresh();
+  assert.notEqual(window.entry.attachment,null,'the folders of the window stay attached');
+  assert.equal(window.statusBars[0].text,'$(sync~spin) DevMate');assert.match(window.statusBars[0].tooltip,/^DevMate runtime: busy, it does not answer at the moment/);
+  assert.equal(window.statusBars[0].command,'devMate.runtime.menu','it is not offered to be started: it runs');
+  // It answers again: nothing was let go, so nothing is attached a second time.
+  client.status=answers;
+  await window.entry.refresh();
+  assert.equal(window.statusBars[0].text,'$(plug) DevMate');assert.equal(client.calls.filter(([name])=>name==='window.attach').length,attached);
+  // A runtime that answers that it is stopping, or is still starting, is not busy: it says what it does, and the
+  // window does not go on offering what is on its way out.
+  for(const going of ['stopping','starting']){
+    client.status=async()=>({state:going,running:false,processAlive:true,owner:{pid:1}});
+    await window.entry.refresh();
+    assert.equal(window.entry.attachment,null,going);assert.equal(window.statusBars[0].text,'$(circle-slash) DevMate',going);
+    assert.match(window.statusBars[0].tooltip,new RegExp('^DevMate runtime: '+going),going);
+    client.status=answers;
+    await window.entry.refresh();
+    assert.notEqual(window.entry.attachment,null,going);
+  }
+  // The folder the runtime was started from is gone under it (an update removed it): said for as long as it is so.
+  client.status=async()=>({...await answers(),health:{filesGone:true}});
+  await window.entry.refresh();
+  assert.equal(window.statusBars[0].text,'$(warning) DevMate');assert.match(window.statusBars[0].tooltip,/^DevMate runtime: ready \(its files were removed by an update, restart it\)/);
+  client.status=answers;
+  // A runtime whose process is gone is one that stopped: the window lets go.
+  client.state.running=false;
+  await window.entry.refresh();
+  assert.equal(window.entry.attachment,null);assert.equal(window.statusBars[0].text,'$(circle-slash) DevMate');
+  await window.entry.deactivate();
 });
 
 test('a newer extension offers to restart an older shared runtime once; diagnostics keep their errors under a flood of hints',async()=>{
@@ -343,7 +402,8 @@ test('a window offers the ripgrep its editor ships, in either layout, so searchi
 });
 
 test('a window with several shared folders hears about every shared folder before its user has chosen one, and only about its own',async t=>{
-  const f=await fixture(t),roots=['api','web'].map(name=>{const root=path.join(f.temp,'several-'+name);fs.mkdirSync(root);return root;});
+  // (One folder has a name that would read as a link where a notification names it: see the end of this test.)
+  const f=await fixture(t),roots=['api','web [x](y)'].map(name=>{const root=path.join(f.temp,'several-'+name);fs.mkdirSync(root);return root;});
   const elsewhere=path.join(f.temp,'several-elsewhere');fs.mkdirSync(elsewhere);
   const window=fakeWindow(f.instanceRoot,'Monorepo editor',roots);
   t.after(()=>window.entry.deactivate());
@@ -361,6 +421,41 @@ test('a window with several shared folders hears about every shared folder befor
   await until(()=>window.asked.some(message=>/^An agent is waiting for your approval: Run the migration/.test(message)),'the approval is announced');
   assert.equal(window.asked.filter(message=>/waiting for your approval/.test(message)).length,1,'what happens in a folder of another window is not announced here');
   assert.ok(mine.id);
+  // What an agent asks is announced cut short. A task that a connected client handed over is announced with its
+  // whole question: the names in it stand in quotes the runtime closes, and a cut could leave one of them open.
+  const question='A connected client asks codex (named "'+'n'.repeat(60)+'") to run a task in the project "'+'p'.repeat(60)+'": '+'x'.repeat(160)+' [and 12 more characters]';
+  store.create('approval',{projectId:mine.projectId,status:'pending',summary:'y'.repeat(300)});
+  store.create('approval',{projectId:mine.projectId,status:'pending',kind:'delegation',summary:question});
+  await until(()=>window.asked.includes('A connected client asks to run a task on your account: '+question),'the task is announced with its whole question');
+  assert.ok(question.length>200&&window.asked.includes('An agent is waiting for your approval: '+'y'.repeat(200)));
+  // VS Code makes a link of "[label](address)" in the text of a notification, and a link that names a command runs
+  // it when it is clicked. What a notification says is not all DevMate's: the first line of a client's task, a name,
+  // what an agent asks (which it may have read in the repository). None of it can form a link, whoever wrote it.
+  const command='command:workbench.action.terminal.sendSequence?%7B%22text%22%3A%22devmate%20delegation%20allow%5Cr%22%7D';
+  const lure='A connected client asks codex (named "[x]('+command+')") to run a task in the project "[y](https://example.com/)": [Open Workbench]('+command+')';
+  store.create('approval',{projectId:mine.projectId,status:'pending',kind:'delegation',summary:lure});
+  store.create('approval',{projectId:mine.projectId,status:'pending',summary:'Run [this](command:workbench.action.reloadWindow)'});
+  store.create('input',{projectId:mine.projectId,status:'pending',summary:'Which [branch](file:///c:/x)?'});
+  await until(()=>window.asked.filter(message=>/\[Open Workbench\]|\[this\]|\[branch\]/.test(message)).length===3,'the three are announced');
+  assert.ok(window.asked.includes('A connected client asks to run a task on your account: '+lure.replaceAll('](','] (')));
+  assert.ok(window.asked.includes('An agent is waiting for your approval: Run [this] (command:workbench.action.reloadWindow)'));
+  assert.ok(window.asked.includes('An agent is asking you a question: Which [branch] (file:///c:/x)?'));
+  for(const message of window.asked)assert.ok(!message.includes(']('),message);
+  // (As VS Code 1.101 reads it: its own pattern for a link in a notification finds none in any of them.)
+  const link=/\[([^\]]+)\]\(((?:https?:\/\/|command:|file:)[^)\s]+)(?: (["'])(.+?)(\3))?\)/i;
+  assert.ok(link.test(lure));for(const message of window.asked)assert.equal(link.test(message),false,message);
+  // The same for what is shown as a warning and as an error. A warning that names a folder as it is called on the
+  // disk (a repository somebody else named); an error whose words came from elsewhere.
+  const warned=[],picked=window.vscode.window.showQuickPick;
+  window.vscode.window.showWarningMessage=async message=>{warned.push(message);};
+  window.vscode.window.showQuickPick=async items=>items.find(item=>item.access==='none')||items[0];
+  await window.commands.get('devMate.runtime.registerFolder')(roots[1]);
+  assert.deepEqual(warned,['Stop sharing "several-web [x] (y)" with AI clients?']);
+  assert.ok(window.asked.some(message=>message.startsWith('DevMate shares "several-web [x] (y)"')),'the notice that it is shared named it the same way');
+  window.vscode.window.showQuickPick=async()=>{throw new Error('The server said [Open Workbench]('+command+')');};
+  await window.commands.get('devMate.runtime.accessProfile')();
+  assert.ok(window.shown.includes('error: The server said [Open Workbench] ('+command+')'),window.shown.filter(line=>line.startsWith('error')).join(' | '));
+  window.vscode.window.showQuickPick=picked;
   // Sharing changed from elsewhere reaches the window at once.
   await f.call('project.update',{id:window.entry.attachment.roots[0].projectId,access:'read'});
   await until(()=>window.entry.attachment.roots[0].access==='read','the window shows the new access');

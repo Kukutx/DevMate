@@ -16,6 +16,7 @@ import { startRuntime } from '../runtime/main.mjs';
 import { readRuntimeRecord } from '../runtime/client.mjs';
 import { __test as lock } from '../runtime/instance-lock.mjs';
 import { VERSION } from '../runtime/version.mjs';
+import { main as cli } from '../runtime/cli.mjs';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const localConnection = () => ({ async start() {}, async stop() {}, status() { return { kind: 'local', status: 'ready' }; } });
@@ -33,8 +34,19 @@ test('stored state says which DevMate wrote it, and a DevMate that would misread
   const directory = scratch(t, 'format');
   const first = new Store(directory);
   assert.deepEqual(first.setting('state.format'), { minor: STATE_MINOR, writtenBy: VERSION });
-  first.setting('state.format', { minor: STATE_MINOR + 1, writtenBy: '4.99.0' });
+  // State of the release before the owner was asked about a client's tasks (it wrote 0) is opened and from then on
+  // carries this release's number, which that release refuses: an entry that was not updated cannot start a runtime
+  // that would run those tasks unasked. The number is therefore not to go back below 1.
+  assert.ok(STATE_MINOR >= 1);
+  const kept = first.create('project', { name: 'kept', root: directory });
+  first.setting('delegation.mode', 'allow');
+  first.setting('state.format', { minor: 0, writtenBy: '4.0.5' });
   first.close();
+  const opened = new Store(directory);
+  assert.deepEqual(opened.setting('state.format'), { minor: STATE_MINOR, writtenBy: VERSION });
+  assert.deepEqual([opened.get('project', kept.id).name, opened.setting('delegation.mode')], ['kept', 'allow'], 'what was stored is all there');
+  opened.setting('state.format', { minor: STATE_MINOR + 1, writtenBy: '4.99.0' });
+  opened.close();
   assert.throws(() => new Store(directory), error => error.code === 'state_version' && /last used by DevMate 4\.99\.0/.test(error.message) && /Update this DevMate/.test(error.message));
   // Nothing was touched by the refusal, and the file is not held: the newer DevMate still finds its state.
   const raw = new DatabaseSync(path.join(directory, 'state.sqlite'));
@@ -76,6 +88,38 @@ test('state files cut short by a crash do not lock the owner out: credentials, t
   fs.mkdirSync(path.join(instance, 'processes', 'left-over-directory'), { recursive: true });
   const again = await startRuntime({ instanceRoot: instance, port: 0, connectionFactory: localConnection });
   await again.stop();
+});
+
+test('a runtime whose own folder was taken away under it says so to whoever asks, for as long as it is so', { timeout: 60000 }, async t => {
+  // An update of an editor's extension removes the folder of the version before, while the runtime that was started
+  // from it runs on. It answers from memory; what it starts from that folder later (an agent's channel, Claude
+  // Code's permission requests, the program a browser starts) fails, and nothing said why.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-files-')), instance = path.join(temp, 'instance'), program = path.join(temp, 'extension-4.0.5', 'runtime', 'main.mjs');
+  fs.mkdirSync(path.dirname(program), { recursive: true }); fs.writeFileSync(program, '');
+  const runtime = await startRuntime({ instanceRoot: instance, port: 0, connectionFactory: localConnection, programFile: program });
+  t.after(async () => { await runtime.stop().catch(() => {}); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const health = async () => (await fetch('http://127.0.0.1:' + runtime.port + '/health')).json();
+  const doctor = async () => (await runtime.service.call('runtime.doctor', {}, { id: 'owner', surface: 'local' })).checks.find(item => item.id === 'runtime.files');
+  assert.equal((await health()).filesGone, undefined); assert.equal(await doctor(), undefined);
+  fs.rmSync(path.join(temp, 'extension-4.0.5'), { recursive: true });
+  // At once, with no timer in between: it is looked at when somebody asks.
+  const gone = await health();
+  assert.equal(gone.filesGone, true); assert.equal(gone.status, 'ready', 'it still answers as itself');
+  const check = await doctor();
+  assert.equal(check.status, 'fail'); assert.match(check.detail, /^The folder this runtime was started from is not there any more/); assert.match(check.fix, /devmate restart/);
+  // The command line says it with every start and status, as it says an older runtime.
+  const said = [];
+  await cli(['status'], { stdout: { write() {} }, stderr: { write: text => said.push(text) }, status: async () => ({ state: 'ready', running: true, record: { version: VERSION }, health: gone }) });
+  assert.match(said.join(''), /^The folder the running DevMate was started from is not there any more: an update removed it\. .* Start it again: devmate restart\n$/);
+  // Put back (never so in life, but the word must follow the fact): nothing is said any more.
+  fs.mkdirSync(path.dirname(program), { recursive: true }); fs.writeFileSync(program, '');
+  assert.equal((await health()).filesGone, undefined); assert.equal(await doctor(), undefined);
+  // A file that cannot be asked about for another reason than not being there is not said to be gone. (Asked whether
+  // it exists, the system says no in that case as well: that answer is not the one to go by.)
+  const stat = fs.statSync, exists = fs.existsSync;
+  fs.statSync = (file, ...rest) => { if (file === program) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return stat(file, ...rest); };
+  fs.existsSync = file => file === program ? false : exists(file);
+  try { assert.equal((await health()).filesGone, undefined); } finally { fs.statSync = stat; fs.existsSync = exists; }
 });
 
 test('two starters that both find a dead socket do not both become owner, and an abandoned claim is broken', async t => {

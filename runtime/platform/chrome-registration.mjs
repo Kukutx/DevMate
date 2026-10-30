@@ -60,8 +60,12 @@ export function createChromeRegistration({ instanceRoot, cli, node = process.exe
   const root = instanceDirectory(instanceRoot), directory = path.join(root, 'chrome'), windows = platform === 'win32';
   const shim = path.join(directory, windows ? 'devmate-chrome-host.cmd' : 'devmate-chrome-host'), manifest = path.join(directory, NATIVE_HOST + '.json'), note = path.join(directory, 'registration.json');
   // What the browser starts: a Node with a copy of DevMate, for this instance. The browser adds who is asking.
+  // (On Windows it is a command file, which cmd.exe reads in the code page of the system and not as the UTF-8 it is
+  // written in: a path with other than ASCII letters in it, a home directory in Chinese, came out as other characters
+  // and nothing was started, with no word of it anywhere. Its second line, before the one with the paths, says how
+  // the file is to be read.)
   const starts = (withNode, withCli) => windows
-    ? '@echo off\r\n"' + withNode.replace(/%/g, '%%') + '" "' + withCli.replace(/%/g, '%%') + '" chrome-host --instance "' + root.replace(/%/g, '%%') + '" %*\r\n'
+    ? '@echo off\r\nchcp 65001 >nul 2>&1\r\n"' + withNode.replace(/%/g, '%%') + '" "' + withCli.replace(/%/g, '%%') + '" chrome-host --instance "' + root.replace(/%/g, '%%') + '" %*\r\n'
     : '#!/bin/sh\nexec \'' + [withNode, withCli, 'chrome-host', '--instance', root].map(word => word.replace(/'/g, '\'\\\'\'')).join('\' \'') + '\' "$@"\n';
   // What the browser loads. A browser remembers the folder it was given, so it is given one that stays where it is:
   // a copy in the instance directory, made the same as the extension this DevMate carries. An update through any

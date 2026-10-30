@@ -35,6 +35,22 @@ test('shell command text runs package-manager shims, inherits the owner environm
   assert.ok(fs.readdirSync(path.join(root, '..', 'instance', 'processes')).every(name => name.endsWith('.log')), 'private launch scripts are removed after exit');
 });
 
+test('whether the shell runs a command at all is asked by running one, and a shell that refuses is quoted', async t => {
+  const { manager, temp } = fixture(t);
+  assert.deepEqual(await manager.tryShell(), { ok: true }, 'the shell of this computer runs a one-line command');
+  assert.ok(fs.readdirSync(path.join(temp, 'instance', 'processes')).every(name => !name.startsWith('try-')), 'the script it was asked with is gone');
+  // A shell that is there and refuses: what it says is what is reported. (On Windows: a policy that forbids scripts.)
+  const { EventEmitter } = await import('node:events');
+  const refusing = said => createProcessManager({ instanceRoot: path.join(temp, 'refusing'), shell: { kind: 'sh', file: '/bin/sh', label: 'a shell' },
+    spawnImpl: () => { const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.kill = () => {}; queueMicrotask(() => said(child)); return child; } });
+  const policy = 'File C:\\x\\try.ps1 cannot be loaded because running scripts is disabled on this system.\r\n    + CategoryInfo          : SecurityError: (:) [], PSSecurityException\r\n';
+  assert.deepEqual(await refusing(child => { child.stderr.emit('data', Buffer.from(policy)); child.emit('close', 1); }).tryShell(),
+    { ok: false, reason: 'File C:\\x\\try.ps1 cannot be loaded because running scripts is disabled on this system. + CategoryInfo          : SecurityError: (:) [], PSSecurityException' });
+  assert.deepEqual(await refusing(child => child.emit('close', 3)).tryShell(), { ok: false, reason: 'it ended with code 3' });
+  assert.deepEqual(await refusing(child => child.emit('error', new Error('spawn EACCES'))).tryShell(), { ok: false, reason: 'spawn EACCES' });
+  assert.deepEqual(await refusing(() => {}).tryShell({ timeoutMs: 1000 }), { ok: false, reason: 'it did not end within 1 seconds' });
+});
+
 test('exact executable launch keeps arguments literal and rejects shims, bad cwd and read-only projects', async t => {
   const { manager, project } = fixture(t);
   const literal = await manager.run(project, { file: node, args: ['-e', 'console.log(process.argv[1])', '& $(literal) "quoted"'] });
@@ -122,6 +138,20 @@ test('service exposes shell and process tools with project scoping, model-facing
   // A project may be named by id, by registered directory or by unique name.
   const byName = await service.call('shell.run', { projectId: 'Alpha', file: node, args: ['-e', "console.log('named')"] }, owner);
   assert.equal(byName.projectId, a.id); assert.equal(byName.exitCode, 0);
+  // A command can be given variables of its own, beside the ones every command gets. DevMate's own are not the
+  // caller's to set: the mark by which the devmate command line knows a client started it stays what it is.
+  const shows = "console.log([process.env.GREETING, process.env.DEVMATE_CLIENT_COMMAND, Object.keys(process.env).filter(name => name.toUpperCase() === 'PATH').length, process.env.PATH].join('|'))";
+  const greeted = await service.call('shell.run', { projectId: a.id, file: node, args: ['-e', shows], env: { GREETING: 'hello there', pAtH: 'only-this' } }, owner);
+  // Windows knows a variable by its name whatever its case: the command's own replaces it, and does not stand beside it.
+  // Elsewhere a name in another case is another variable.
+  assert.equal(greeted.output.trim(), process.platform === 'win32' ? 'hello there|1|1|only-this' : 'hello there|1|2|' + process.env.PATH);
+  for (const env of [{ DEVMATE_CLIENT_COMMAND: '0' }, { devmate_client_command: '' }, { DEVMATE_ANYTHING: 'x' }, Object.fromEntries(Array.from({ length: 65 }, (_, index) => ['V' + index, 'x']))])
+    await assert.rejects(service.call('shell.run', { projectId: a.id, file: node, args: ['-e', shows], env }, owner), { code: 'invalid_command' }, JSON.stringify(Object.keys(env).slice(0, 2)));
+  await assert.rejects(service.call('shell.run', { projectId: a.id, file: node, args: ['-e', shows], env: { 'NOT A NAME': 'x' } }, owner), { code: 'invalid_input' });
+  // A job that runs a command takes the same.
+  const job = await service.call('job.start', { projectId: a.id, kind: 'command', input: { file: node, args: ['-e', shows], env: { GREETING: 'from a job' } } }, owner);
+  let done; for (const end = Date.now() + 20000; Date.now() < end;) { done = await service.call('job.read', { id: job.id }, owner); if (done.status !== 'running' && done.status !== 'queued') break; await delay(50); }
+  assert.equal(done.status, 'completed', JSON.stringify(done.result)); assert.match(done.output, /^from a job\|1\|/);
   const byRoot = await service.call('shell.run', { projectId: rootA, command: "node -e 'setInterval(()=>console.log(1),100)'", waitMs: 500 }, owner);
   assert.equal(byRoot.projectId, a.id); assert.equal(byRoot.status, 'running');
   await assert.rejects(service.call('shell.run', { projectId: path.join(temp, 'unregistered'), command: 'x' }, owner), { code: 'project_not_registered' });

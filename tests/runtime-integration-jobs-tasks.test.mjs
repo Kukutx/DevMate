@@ -70,6 +70,54 @@ test('real HTTP command jobs retain results, retry with new execution, and confi
   assert.equal(fetched.structuredContent.status, 'cancelled'); assert.match(fetched.structuredContent.output, /started:/);
 });
 
+test('a job is followed to its end by waiting for it, and a command job that still runs says where its output is', async t => {
+  const f = await fixture(t), p = await f.project('followed');
+  // Prints at once, goes on when it is told to, and ends.
+  fs.writeFileSync(path.join(p.root, 'slow.mjs'), "import fs from 'node:fs';console.log('first line');const timer=setInterval(()=>{if(fs.existsSync('go')){clearInterval(timer);console.log('last line');}},50);");
+  const job = await f.call('job.start', { ...p.scope, kind: 'command', input: { file: process.execPath, args: ['slow.mjs'] } });
+  // While it runs the job names its process, and what the command has printed so far is read there.
+  const running = await until(async () => { const now = await f.call('job.read', { id: job.id }); return now.processId && now; }, 'the job to name its process');
+  assert.equal(running.status, 'running'); assert.equal(running.output, '');
+  const live = await f.call('process.read', { id: running.processId, cursor: 0, waitMs: 10000 });
+  assert.match(live.output, /first line/); assert.equal(live.status, 'running');
+  // A wait that the job outlasts comes back with the job as it is then.
+  let began = Date.now();
+  assert.equal((await f.call('job.read', { id: job.id, waitMs: 400 })).status, 'running'); assert.ok(Date.now() - began >= 350, 'it waited');
+  // A wait the job ends in comes back when it ends, with all of it, and not when the time given to it is over.
+  began = Date.now();
+  const waited = f.call('job.read', { id: job.id, waitMs: 12000 });
+  fs.writeFileSync(path.join(p.root, 'go'), '');
+  const done = await waited;
+  assert.equal(done.status, 'completed'); assert.match(done.output, /first line[\s\S]*last line/); assert.equal(done.processId, running.processId);
+  assert.ok(Date.now() - began < 8000, 'answered ' + (Date.now() - began) + ' ms after the command was let go');
+  // One that has ended is answered at once, and a client has the same through the generic call that only reads.
+  began = Date.now();
+  const read = await f.tool('operations_query', { operation: 'job.read', input: { id: job.id, waitMs: 12000 } });
+  assert.equal(read.structuredContent.status, 'completed'); assert.ok(Date.now() - began < 5000);
+});
+
+test('the variables a command job was given are used when it runs and made again, and are shown by name only', async t => {
+  const f = await fixture(t), p = await f.project('variables');
+  // The command says how long its variable is, not what it holds, and fails the first time so that it can be made again.
+  fs.writeFileSync(path.join(p.root, 'print.mjs'), "import fs from 'node:fs';console.log('length:'+String(process.env.JOB_TOKEN||'').length);const again=fs.existsSync('ran');fs.writeFileSync('ran','');process.exitCode=again?0:5;");
+  const given = { JOB_TOKEN: 'not-for-display-1234', JOB_MODE: 'quiet' }, names = { JOB_TOKEN: '[given]', JOB_MODE: '[given]' };
+  const job = await f.call('job.start', { ...p.scope, kind: 'command', input: { file: process.execPath, args: ['print.mjs'], env: given } });
+  assert.deepEqual(job.input.args.environment, names);
+  const failed = await f.call('job.read', { id: job.id, waitMs: 12000 });
+  assert.equal(failed.status, 'failed'); assert.match(failed.output, /length:20/, 'the command had its variable'); assert.deepEqual(failed.input.args.environment, names);
+  assert.deepEqual((await f.call('job.list', p.scope)).items.find(item => item.id === job.id).input.args.environment, names);
+  // Made again, it runs with what it was given the first time.
+  const retry = await f.call('job.retry', { id: job.id });
+  assert.deepEqual(retry.input.args.environment, names);
+  const completed = await f.call('job.read', { id: retry.id, waitMs: 12000 });
+  assert.equal(completed.status, 'completed'); assert.match(completed.output, /length:20/);
+  // Nothing that shows what happened holds the value: not the journal every view reads, not the events a client lists.
+  const journal = JSON.stringify(f.runtime.service.store.events({ projectId: p.project.id, limit: 2000 }));
+  assert.ok(journal.includes('JOB_TOKEN') && !journal.includes('not-for-display-1234'), 'the journal has the name and not the value');
+  const listed = JSON.stringify(await f.call('event.list', { ...p.scope }));
+  assert.ok(!listed.includes('not-for-display-1234'));
+});
+
 test('runtime.stop through local HTTP drains a real command before releasing ownership', async t => {
   const f = await fixture(t), p = await f.project('shutdown');
   fs.writeFileSync(path.join(p.root, 'wait.mjs'), "import fs from 'node:fs';fs.writeFileSync('owned.pid',String(process.pid));setInterval(()=>{},1000);");

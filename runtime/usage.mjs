@@ -2,6 +2,11 @@
 // and with which errors. It answers two questions nothing else does: which tools a model keeps using wrongly, and
 // what became slow. Nothing of a call's input is kept; a failure keeps its code and the start of its message.
 const RECENT_FAILURES = 50;
+// A message is shown by its start. More of it is kept than is shown, for the report for a bug: that takes out of the
+// whole of it what is private (a message may list the projects by their names) and cuts it short afterwards, since a
+// name cut in two is not recognised as the name it was.
+export const MESSAGE_SHOWN = 300;
+const MESSAGE_KEPT = 2000;
 // Durations are counted in fixed steps (upper bounds in milliseconds): enough to tell the usual case from the slow one
 // without keeping any single measurement. An average hides the occasional slow call, and a maximum is one hiccup.
 const STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000];
@@ -29,17 +34,18 @@ export function createUsage({ now = Date.now, clock = () => performance.now() } 
       if (!error) return;
       const code = String(error.code || (error.name === 'ZodError' ? 'invalid_input' : 'internal_error')).slice(0, 80);
       entry.failed++; entry.errors[code] = (entry.errors[code] || 0) + 1;
-      recent.push({ request, at: new Date(now()).toISOString(), operation: name, code, message: String(error.message || '').slice(0, 300),
+      recent.push({ request, at: new Date(now()).toISOString(), operation: name, code, message: String(error.message || '').slice(0, MESSAGE_KEPT),
         ms: Math.round(ms), caller: connected ? 'connected' : 'local' });
       if (recent.length > RECENT_FAILURES) recent.shift();
     };
   }
   // Most used first. connected: calls that came through MCP rather than from the owner at this computer.
   // p50Ms and p95Ms: half, and nineteen in twenty, of the calls took at most this long (null: longer than the last step).
-  const snapshot = () => ({ requests,
+  // whole: a failure's message as far as it is kept, not only as far as it is shown.
+  const snapshot = ({ whole = false } = {}) => ({ requests,
     operations: [...operations].map(([name, entry]) => ({ name, calls: entry.calls, connected: entry.connected, failed: entry.failed,
       ...(entry.failed ? { errors: { ...entry.errors } } : {}), averageMs: Math.round(entry.totalMs / entry.calls), p50Ms: percentile(entry.steps, entry.calls, 0.5), p95Ms: percentile(entry.steps, entry.calls, 0.95), maxMs: Math.round(entry.maxMs) }))
       .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name)),
-    recentFailures: [...recent].reverse() });
+    recentFailures: [...recent].reverse().map(item => whole ? item : { ...item, message: item.message.slice(0, MESSAGE_SHOWN) }) });
   return { begin, snapshot };
 }

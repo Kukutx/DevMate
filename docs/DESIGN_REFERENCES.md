@@ -1,6 +1,6 @@
 # DevMate design references
 
-Reviewed on 2026-10-06, 2026-10-07, 2026-10-09 and 2026-10-11. The current implementation is the DevMate 4 local runtime, fresh SQLite state, explicit capability composition and shared workbench described in the [README](../README.md). What is not done yet and what could not be verified is in [STATUS.md](STATUS.md).
+Reviewed on 2026-10-06, 2026-10-07, 2026-10-09, 2026-10-11 and 2026-10-12. The current implementation is the DevMate 4 local runtime, fresh SQLite state, explicit capability composition and shared workbench described in the [README](../README.md). What is not done yet and what could not be verified is in [STATUS.md](STATUS.md).
 
 ## Official protocols and UI
 
@@ -25,7 +25,7 @@ Reviewed its workbench, workflow/session separation, durable delivery and handof
 
 The DevMate 4 implementation uses its own service, SQLite records and native adapters. It does not embed WebCodex source or promise feature parity with its changing development branch.
 
-Its repository also holds a desktop app and a browser bridge extension (`extensions/browser-bridge`), and its README speaks of one-command sharing for a quick session. DevMate has no extension in the user's own browser: its browser capability drives a separate, isolated browser.
+Its repository also holds a desktop app and a browser bridge extension (`extensions/browser-bridge`), and its README speaks of one-command sharing for a quick session. DevMate has both kinds of browser capability: an extension in the owner's own browser (Chrome and Edge, reached over the browser's Native Messaging, with the owner's tabs, bookmarks and signed-in pages), which is what was taken from here, and a separate, isolated browser driven by its browser engine.
 
 ## DevSpace
 

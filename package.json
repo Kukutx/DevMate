@@ -2,7 +2,7 @@
   "name": "devmate-agent",
   "displayName": "DevMate Agent",
   "description": "Give ChatGPT, Claude and any MCP client real hands on your own computer: files, shell, Git, editor diagnostics and local coding agents, without a paid tunnel.",
-  "version": "4.0.5",
+  "version": "4.0.6",
   "license": "MIT",
   "publisher": "kukutx",
   "icon": "assets/icon.png",
@@ -175,8 +175,11 @@
           "description": "%config.nodeCommandPath%"
         },
         "devMate.runtimePort": {
-          "type": "integer",
-          "default": 8788,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": null,
           "minimum": 1024,
           "maximum": 65535,
           "scope": "machine",
@@ -335,7 +338,7 @@
     "package:cli": "node scripts/package-runtime.mjs cli",
     "candidate": "node scripts/release-candidate.mjs",
     "version:set": "node scripts/set-version.mjs",
-    "release:preflight": "npm run lint && npm run check && npm run test:unit && npm run test:vscode-host && npm run candidate",
+    "release:preflight": "npm audit --omit=dev --audit-level=moderate && npm run lint && npm run check && npm run test:unit && npm run test:vscode-host && npm run candidate -- --release",
     "devmate": "node runtime/cli.mjs",
     "lint": "eslint ."
   },
@@ -358,7 +361,7 @@
     "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/node": "2.1.1",
     "@modelcontextprotocol/server": "2.3.1",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -371,6 +374,6 @@
     "playwright-core": "^1.63.0"
   },
   "overrides": {
-    "@hono/node-server": "2.0.10"
+    "@hono/node-server": "2.1.5"
   }
 }

@@ -4,8 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { Store } from '../runtime/store.mjs';
 import { createWorkspaceService } from '../runtime/workspace.mjs';
+import { activeCommandProcessCount } from '../runtime/platform/command-process.mjs';
 
 function fixture(t) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-editing-'));
@@ -24,6 +26,67 @@ const git = (cwd, ...args) => {
   assert.equal(result.status, 0, result.stderr);
   return result.stdout;
 };
+
+test('text is added to the end of a file with append: what was there is kept, and nothing else about the file is said', async t => {
+  const { project, service, file } = fixture(t);
+  // A file that is not there is created.
+  assert.equal(service.write(project, { path: 'notes/log.md', text: '# Log\n', append: true }).written, true);
+  const first = service.read(project, { path: 'notes/log.md' });
+  const added = service.write(project, { path: 'notes/log.md', text: 'one more line\r\n', append: true });
+  assert.equal(added.written, true); assert.equal(fs.readFileSync(file('notes/log.md'), 'utf8'), '# Log\none more line\r\n');
+  // It is a change like any other: what the file held before can be brought back.
+  const entries = service.history(project, { path: 'notes/log.md' }).items;
+  assert.deepEqual([entries.length, entries[0].previousSha256, entries[0].previousRestorable], [2, first.sha256, true]);
+  service.restore(project, { path: 'notes/log.md', sha256: first.sha256 });
+  assert.equal(fs.readFileSync(file('notes/log.md'), 'utf8'), '# Log\n');
+  // Nothing to add changes nothing. append says nothing about what the file holds, so it takes neither of the two
+  // inputs that do; it is for text; and a file does not grow beyond what these tools read.
+  assert.equal(service.write(project, { path: 'notes/log.md', text: '', append: true }).written, false);
+  assert.throws(() => service.write(project, { path: 'notes/log.md', text: 'x', append: true, overwrite: true }), { code: 'invalid_input', message: /takes neither expectedSha256 nor overwrite/ });
+  assert.throws(() => service.write(project, { path: 'notes/log.md', text: 'x', append: true, expectedSha256: first.sha256 }), { code: 'invalid_input' });
+  fs.writeFileSync(file('image.bin'), Buffer.from([1, 0, 2]));
+  assert.throws(() => service.write(project, { path: 'image.bin', text: 'x', append: true }), { code: 'invalid_input', message: /text files/ });
+  fs.writeFileSync(file('big.txt'), 'a'.repeat(8 * 1024 * 1024 - 2));
+  assert.throws(() => service.write(project, { path: 'big.txt', text: 'more', append: true }), { code: 'invalid_input', message: /beyond 8 MiB/ });
+  assert.equal(fs.statSync(file('big.txt')).size, 8 * 1024 * 1024 - 2);
+  // What is added is UTF-8. A text file in another encoding (GBK here, as on a Chinese Windows) would hold two
+  // encodings afterwards: it is refused as workspace_edit refuses it, and is as it was.
+  const gbk = Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x0a]);
+  fs.writeFileSync(file('gbk.txt'), gbk);
+  assert.throws(() => service.write(project, { path: 'gbk.txt', text: '中文\n', append: true }), { code: 'binary_file', message: /an encoding other than UTF-8/ });
+  assert.throws(() => service.edit(project, { path: 'gbk.txt', edits: [{ oldText: 'x', newText: 'y' }] }), { code: 'binary_file' });
+  assert.deepEqual(fs.readFileSync(file('gbk.txt')), gbk);
+});
+
+test('append adds to the file itself: a program that is writing to it goes on writing to the same file', async t => {
+  const { project, service, file } = fixture(t);
+  fs.writeFileSync(file('server.log'), 'started\n');
+  // The way a server has its log: open, to be written to for as long as it runs.
+  const log = fs.openSync(file('server.log'), 'a');
+  t.after(() => { try { fs.closeSync(log); } catch { /* closed below */ } });
+  const before = fs.statSync(file('server.log'), { bigint: true }).ino;
+  const added = service.write(project, { path: 'server.log', text: 'a note from the model\n', append: true });
+  fs.writeSync(log, 'the server goes on\n');
+  // The same file as before, with both in it; replaced, the server's line would have gone into the file that was moved away.
+  assert.equal(fs.statSync(file('server.log'), { bigint: true }).ino, before);
+  assert.equal(fs.readFileSync(file('server.log'), 'utf8'), 'started\na note from the model\nthe server goes on\n');
+  // The answer names what the file held when it was added to, and the change can be taken back like any other.
+  assert.equal(added.written, true); assert.equal(added.sha256, createHash('sha256').update('started\na note from the model\n').digest('hex'));
+  const entry = service.history(project, { path: 'server.log' }).items[0];
+  assert.equal(entry.action, 'written'); assert.equal(entry.previousRestorable, true);
+  // What the server wrote while the model added its line is in the file and in what is said of it.
+  fs.writeSync(log, 'once more\n');
+  const again = service.write(project, { path: 'server.log', text: 'second note\n', append: true });
+  assert.equal(again.sha256, service.read(project, { path: 'server.log' }).sha256);
+  fs.closeSync(log);
+  // A file marked read-only is not added to.
+  if (process.getuid?.() !== 0) {
+    fs.chmodSync(file('server.log'), 0o444);
+    t.after(() => { try { fs.chmodSync(file('server.log'), 0o666); } catch { /* gone */ } });
+    assert.throws(() => service.write(project, { path: 'server.log', text: 'x\n', append: true }), { code: 'read_only_file', message: /^server\.log is marked read-only and was left as it is\./ });
+    fs.chmodSync(file('server.log'), 0o666);
+  }
+});
 
 test('exact-replacement edits are atomic, unambiguous and keep CRLF files intact', async t => {
   const { project, service, file } = fixture(t);
@@ -178,6 +241,53 @@ test('reads page large files by line, find matches globs and search takes regex,
   assert.equal(literal.items.length, 3); assert.ok(literal.items.every(item => item.path.endsWith('.ts') && item.line === 1));
   assert.equal((await service.search(project, { query: 'needle', ignoreCase: true, glob: 'src/main.ts' })).items.length, 2);
   assert.equal((await service.search(project, { query: 'Need[a-z]+ = \\d', regex: true, path: 'src/util' })).items.length, 2);
+  // What is found comes folder by folder and name by name, and the lines of a file in their own order, every time:
+  // ripgrep reads the tree on several threads and is not asked to sort, so the order is made here.
+  fs.mkdirSync(file('src-old')); fs.writeFileSync(file('src-old/a.ts'), 'const Needle = 0;\n'); fs.writeFileSync(file('src/Zed.ts'), 'x\nNeedle\nNeedle again\n');
+  // Names are compared by their characters' numbers, as ripgrep does: a full-width letter (U+FF21) comes before an
+  // emoji (U+1F600), which a comparison of 16-bit units would put first.
+  const wide = 'src/' + String.fromCharCode(0xff21) + '.ts', emoji = 'src/' + String.fromCodePoint(0x1f600) + '.ts';
+  for (const name of [emoji, wide]) fs.writeFileSync(file(name), 'nothing to find\n');
+  const ordered = ['src/Zed.ts', 'src/main.ts', 'src/util/math.test.ts', 'src/util/math.ts', wide, emoji, 'src-old/a.ts'];
+  for (let round = 0; round < 5; round++) {
+    assert.deepEqual((await service.find(project, { pattern: '*.ts' })).items.map(item => item.path), ordered);
+    assert.deepEqual((await service.search(project, { query: 'Needle', glob: '*.ts' })).items.map(item => item.path + ':' + item.line),
+      ['src/Zed.ts:2', 'src/Zed.ts:3', 'src/main.ts:1', 'src/util/math.test.ts:1', 'src/util/math.ts:1', 'src-old/a.ts:1']);
+  }
+  // A list that is cut holds the first of them in that order.
+  const cut = await service.find(project, { pattern: '*.ts', limit: 2 });
+  assert.deepEqual([cut.items.map(item => item.path), cut.truncated], [ordered.slice(0, 2), true]);
+  const few = await service.search(project, { query: 'Needle', glob: '*.ts', limit: 3 });
+  assert.deepEqual([few.items.map(item => item.path + ':' + item.line), few.truncated], [['src/Zed.ts:2', 'src/Zed.ts:3', 'src/main.ts:1'], true]);
+});
+
+test('a find or a search that is given more than it takes ends ripgrep, shows whole entries of a part, and leaves no process behind', { timeout: 180000 }, async t => {
+  const { project, service, store, file } = fixture(t);
+  // The same tools with a small bound, so that a few hundred files cross it: with the real one it takes tens of thousands.
+  const small = createWorkspaceService({ store, scanChars: 3000 });
+  fs.mkdirSync(file('many'));
+  const names = Array.from({ length: 400 }, (_, index) => 'many/file-' + String(index).padStart(4, '0') + '.txt');
+  for (const [index, name] of names.entries()) fs.writeFileSync(file(name), 'needle ' + index + '\n');
+  // Several times over: whether ripgrep has ended by itself when it is to be ended differs from one run to the next,
+  // and both ways have to leave nothing behind (on Windows a process that had ended was once counted for good as not
+  // known to have ended).
+  for (let round = 0; round < 10; round++) {
+    const found = await small.find(project, { pattern: '*.txt', limit: 2000 });
+    assert.deepEqual([found.truncated, found.withheld], [true, undefined], 'what was cut is said, and the piece of a path at the cut is not taken for a file that is kept back');
+    assert.ok(found.items.length >= 20 && found.items.length < 400, found.items.length + ' of 400');
+    assert.ok(found.items.every(item => names.includes(item.path) && item.size > 0), 'whole paths only');
+    assert.deepEqual(found.items.map(item => item.path), found.items.map(item => item.path).sort(), 'in order');
+    const hits = await small.search(project, { query: 'needle', limit: 1000 });
+    assert.equal(hits.truncated, true);
+    assert.ok(hits.items.length >= 2 && hits.items.length < 400, hits.items.length + ' of 400');
+    assert.ok(hits.items.every(item => names.includes(item.path) && item.line === 1 && item.text === 'needle ' + Number(item.path.slice(10, 14))), 'whole hits only');
+    assert.equal(activeCommandProcessCount(), 0, 'no process is left counted after round ' + round);
+  }
+  // Within the bound nothing is cut, and it is all there.
+  const all = await service.find(project, { pattern: '*.txt', limit: 2000 });
+  assert.deepEqual([all.truncated, all.items.map(item => item.path)], [false, names]);
+  assert.equal((await service.search(project, { query: 'needle', limit: 1000 })).items.length, 400);
+  assert.equal(activeCommandProcessCount(), 0);
 });
 
 test('read-only Git history tools report log, show, blame and branches without exposing protected files', async t => {

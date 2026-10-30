@@ -9,6 +9,7 @@ import { createCloudflareConnection, normalizeCloudflareConfig } from './cloudfl
 import { createConnectionRecovery } from './connection-recovery.mjs';
 import { createOpenAiTunnel } from './openai-tunnel.mjs';
 import { ownedProcess } from './platform/owned-process.mjs';
+import { startable } from './platform/tools.mjs';
 
 const { childExited, terminateProcessTree } = processTree;
 const executeFile = promisify(execFile);
@@ -74,7 +75,7 @@ export async function inspectTunnelClient({ executable, execFileImpl = executeFi
 }
 
 export function createConnection({
-  config = { kind: 'local' }, localMcpUrl, instanceRoot, instanceId,
+  config = { kind: 'local' }, localMcpUrl, localHeaders, beside = false, instanceRoot, instanceId,
   env = process.env, spawnImpl = spawn, fetchImpl = globalThis.fetch,
   terminateImpl = terminateProcessTree
 } = {}) {
@@ -83,7 +84,7 @@ export function createConnection({
   if (settings.kind === 'cloudflare' || settings.kind === 'cloudflare-quick') return createCloudflareConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl, fetchImpl });
   if (settings.kind === 'openai-tunnel' && !settings.executable) {
     const tunnel = createOpenAiTunnel({ tunnelId: settings.tunnelId, runtimeKeyEnv: settings.runtimeKeyEnv, organizationId: settings.organizationId, maxConcurrentRequests: settings.maxConcurrentRequests,
-      localMcpUrl: httpTarget(localMcpUrl), instanceId, env, fetchImpl });
+      localMcpUrl: httpTarget(localMcpUrl), localHeaders, beside, instanceId, env, fetchImpl });
     return { ...tunnel, config: settings };
   }
   const localUrl = httpTarget(localMcpUrl);
@@ -145,7 +146,7 @@ export function createConnection({
       failed = false;
       if (settings.kind === 'local') { phase = 'local'; return snapshot(); }
       if (settings.kind === 'external-https') { phase = 'configured'; return snapshot(); }
-      if (!fs.statSync(settings.executable, { throwIfNoEntry: false })?.isFile()) throw new Error('Official tunnel-client executable is not installed at the selected path');
+      if (!startable(settings.executable)) throw new Error('Official tunnel-client executable is not installed at the selected path');
       const runtimeKey = env[settings.runtimeKeyEnv];
       if (typeof runtimeKey !== 'string' || !runtimeKey.trim()) throw new Error(`Missing runtime key environment variable: ${settings.runtimeKeyEnv}`);
       fs.mkdirSync(path.dirname(healthFile), { recursive: true, mode: 0o700 });

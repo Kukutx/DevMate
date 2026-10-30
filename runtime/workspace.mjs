@@ -40,6 +40,42 @@ const unlistable = new Set(['unsafe_path', 'unsafe_file', 'outside_project', 'in
 const hash = value => createHash('sha256').update(value).digest('hex');
 const slash = value => value.replace(/\\/g, '/');
 const error = (code, message, details) => new DomainError(code, message, details);
+// On Windows a file another program has open for a moment (a virus scanner or an indexer, right after a file is
+// written) cannot be replaced, moved or deleted until it is let go. These calls hold the runtime up while they
+// wait. So for a caller that tries again by itself (quickly(), which the operations use: operations/files.mjs) it is
+// tried a few times at once and no more, and the refusal is then said as what it is, apart from every other fault:
+// the caller makes the whole change again with the runtime free in between. Any other caller gets the long wait of
+// replaceFile and the system's own error.
+const HELD = ['EPERM', 'EBUSY', 'EACCES'], QUICK_REPEATS = 4;
+const busy = rel => error('file_busy', 'Windows does not let ' + rel + ' be changed right now: another program has it open (a virus scanner or an indexer does that for a moment after a file is written). It was left as it is. Try again in a moment.');
+// A file marked read-only is refused for good, not for a moment.
+const writableFile = full => { try { fs.accessSync(full, fs.constants.W_OK); return true; } catch { return false; } };
+// On Windows that mark means the file is not to be changed, and Windows itself replaces no such file by another
+// that is renamed over it. Moved aside it could be: it is refused before that is tried.
+const readOnlyFile = rel => error('read_only_file', rel + ' is marked read-only and was left as it is. Take the mark off, with a command, to change it.');
+const keptReadOnly = (rel, full) => { if (WINDOWS && fs.existsSync(full) && !writableFile(full)) throw readOnlyFile(rel); };
+// A file that was moved out of the way and could be neither replaced nor put back: nothing is under its name, and
+// what it held is beside it under a working copy's name, which no listing shows. Said with that name, so that it is found.
+const displaced = (rel, aside) => Object.assign(error('file_displaced', rel + ' could not be replaced, and could not be put back where it was: there is no file under that name now. What it held is in ' +
+  path.basename(aside) + ' in the same folder, a name the file tools do not list. Move it back with a command (for example: mv), then try the change again.', { heldIn: path.basename(aside) }), { incomplete: true });
+// What was moved out of the way and could not be removed at once (a program had it mapped) is removed later: tried
+// again with every file that is replaced, added to, moved or deleted after it, for as long as this runtime runs.
+const leftAside = new Set();
+const retryAside = () => { for (const earlier of [...leftAside]) { try { fs.rmSync(earlier, { force: true }); leftAside.delete(earlier); } catch { /* still held */ } } };
+function removeAside(file) {
+  try { fs.rmSync(file, { force: true, maxRetries: 5, retryDelay: 20 }); } catch { if (leftAside.size < 1000) leftAside.add(file); }
+}
+// rel: the name the refusal is said with. gone: the name of the file that is missing where one was moved out of the
+// way and could not be put back (of two files of a move, the one that was to be replaced).
+function unheld(quick, rel, full, work, gone = rel) {
+  retryAside();
+  try { return work(); }
+  catch (failure) {
+    if (failure?.displaced) throw displaced(gone, failure.displaced);
+    throw quick && WINDOWS && HELD.includes(failure?.code) && writableFile(full) ? busy(rel) : failure;
+  }
+}
+export const __test = { leftAside, unheld };
 const bounded = (value, fallback, max) => Number.isInteger(value) && value > 0 ? Math.min(value, max) : fallback;
 const inside = (root, target) => {
   const rel = path.relative(root, target);
@@ -49,13 +85,40 @@ const inside = (root, target) => {
 const protects = project => project.protectSecrets !== false;
 const hidden = (project, rel) => protects(project) && isSensitiveWorkspacePath(rel);
 
+// Marks the view of a project that stands in a working copy this runtime made (see inCopy). Not a name data can carry.
+const OWN_COPY = Symbol('own copy');
+// What goes with a project that is taken off the list because its folder was moved (the store removes the records of
+// the project with it, and project.remove the copies): said wherever taking it off is the remedy, so that it is not
+// taken for a small step. What it leaves is said too: kept versions of files and the log go when their time is up,
+// and of a copy the repository keeps the branch.
+export const TAKING_OFF_THE_LIST = 'Taking a project off the list also removes what DevMate keeps for it: its workflows, tasks, agents and their messages, approvals and questions, jobs with their output, references and artifacts, ' +
+  'and the copies agents worked in that were not applied (of such a copy the repository, wherever it is now, keeps its note of the worktree and the branch devmate/copy-…: there, "git worktree prune" and then "git branch -D devmate/copy-…" remove them). ' +
+  'An editor then no longer shares the folder at the old place by itself.';
 function projectRoot(project) {
   if (!project || typeof project.id !== 'string' || !path.isAbsolute(project.root || '') || !['read', 'write'].includes(project.access)) {
     throw error('invalid_project', 'A project with an absolute root and read/write access is required.');
   }
-  assertSafeWorkspaceRoot(project.root);
+  // The rule is for a folder an owner shares. A copy of the runtime's own is where the runtime put it, beside its
+  // instance directory, and that is ~/.devmate where nothing else was chosen: a name the rule refuses.
+  if (!project[OWN_COPY]) assertSafeWorkspaceRoot(project.root);
+  let stat;
+  try { stat = fs.lstatSync(project.root); }
+  catch (failure) {
+    // A folder that was shared and has been moved, renamed or deleted since, or whose drive is not there now. The two
+    // call for opposite things: a drive is connected again and nothing is lost, while taking the project off the
+    // list also takes what is kept for it. So what to do is said for each, and removing is not offered for the first.
+    if (project[OWN_COPY] || !['ENOENT', 'ENOTDIR'].includes(failure.code)) throw failure;
+    const drive = path.parse(project.root).root;
+    // (Asked of a drive letter only: a share that does not answer has just been waited for once already.)
+    const away = WINDOWS && /^[A-Za-z]:[\\/]$/.test(drive) && !fs.existsSync(drive);
+    throw error('project_missing', away
+      ? 'The folder of this project is on a drive that is not connected: ' + project.root + '. Connect the drive and call again; nothing has to be removed for that.'
+      : 'The folder of this project is not there: ' + project.root + '. If it is on a disk or a share that is not connected right now, connect it and call again; nothing has to be removed for that. ' +
+        'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ') ' +
+        'and shares the folder where it is now (devmate project add <folder>). ' + TAKING_OFF_THE_LIST, { projectId: project.id, ...(away ? { driveMissing: true } : {}) });
+  }
   // A registered directory that has since been swapped for a link would silently redirect every file tool.
-  if (fs.lstatSync(project.root).isSymbolicLink()) throw error('unsafe_root', 'The project directory was replaced by a link. Register the real directory again.');
+  if (stat.isSymbolicLink()) throw error('unsafe_root', 'The project directory was replaced by a link. Register the real directory again.');
   const root = fs.realpathSync.native(project.root);
   if (!fs.statSync(root).isDirectory()) throw error('invalid_project', 'Project root must be a directory.');
   return root;
@@ -79,14 +142,15 @@ function relativeInput(value = '.') {
 // an allowed file under an otherwise protected directory stays reachable.
 // Like Node's ordinary filesystem APIs this is not an OS sandbox against a
 // hostile process replacing directory entries concurrently.
-// `verified` lets one listing check each folder once instead of once per file in it: a find over two thousand
-// files would otherwise ask the file system the same questions about the same few folders thousands of times.
-// It is a Map that lives for a single call.
+// `verified` lets one listing check the project's root and each folder once instead of once per file in it: a find
+// over two thousand files would otherwise ask the file system the same questions about the same few folders
+// thousands of times. It is a Map that lives for a single call, of one project, with one answer to `links`.
 // links: reading may go through a link or junction whose target is still inside the project (a package manager's
 // node_modules is made of them). The canonical target is what is judged, so a link is never a way out of the project
 // or around the credential protection. Everything that changes a file leaves links alone, as before.
 export function resolveProjectPath(project, value = '.', { mustExist = true, policy = true, verified = null, links = false } = {}) {
-  const root = projectRoot(project);
+  let root = verified?.get('\0root');
+  if (root === undefined) { root = projectRoot(project); verified?.set('\0root', root); }
   const rel = relativeInput(value);
   let controlRoot = verified?.get('\0control');
   if (controlRoot === undefined) { controlRoot = project.controlRoot ? fs.realpathSync.native(project.controlRoot) : null; verified?.set('\0control', controlRoot); }
@@ -128,7 +192,7 @@ export function resolveProjectPath(project, value = '.', { mustExist = true, pol
   if (policy && protects(project)) {
     try { assertSafeWorkspacePath(slash(path.relative(root, current)) || '.'); }
     catch (failure) {
-      failure.message += ' This project keeps credential-like files and folders out of the file tools. Its owner can lift that for the project on their own computer; until then work without this path.';
+      failure.message += ' This project keeps credential-like files and folders out of the file tools. Its owner lifts that for the project on their own computer: in the local workbench (devmate ui), or with devmate project.update. Until then work without this path.';
       throw failure;
     }
   }
@@ -143,7 +207,7 @@ function readRegular(full, { limit = MAX_FILE_BYTES, linked = false } = {}) {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || (stat.nlink > 1 && !linked)) throw error('unsafe_file', 'Only regular, unlinked files are supported.');
     if (stat.size > limit) throw error('file_too_large', 'This file is ' + Math.round(stat.size / 1048576) + ' MiB, more than the ' + Math.round(limit / 1048576) +
-      ' MiB that can be handled here. Look at a part of it with a command (for example its last lines), or page its bytes with operations_call workspace.read_bytes.');
+      ' MiB that can be handled here. Look at a part of it with a command (for example its last lines), or page its bytes with operations_query workspace.read_bytes.');
     const bytes = Buffer.allocUnsafe(stat.size);
     let offset = 0;
     while (offset < bytes.length) {
@@ -173,7 +237,7 @@ export function statProjectFile(project, value) {
   return { full, stat };
 }
 function textBytes(bytes) {
-  if (bytes.includes(0)) throw error('binary_file', 'This is a binary file, not text. Its bytes can be paged with operations_call workspace.read_bytes.');
+  if (bytes.includes(0)) throw error('binary_file', 'This is a binary file, not text. Its bytes can be paged with operations_query workspace.read_bytes.');
   try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
   catch { throw error('binary_file', 'This file is text in an encoding other than UTF-8. It can be read with workspace_read; changing it here would rewrite it as UTF-8, so change it with a command (shell_run) or convert it first.'); }
 }
@@ -224,14 +288,19 @@ function checkedCommand(result, accepted = [0]) {
 }
 function emptyCommand() { return { exitCode: 0, stdout: '', stderr: '', timedOut: false, exitConfirmed: true, stdoutTruncated: false, stderrTruncated: false }; }
 
-export function createWorkspaceService({ store } = {}) {
+// scanChars: how much a find or a search takes from ripgrep before it ends it (see scanned).
+export function createWorkspaceService({ store, scanChars = 2000000 } = {}) {
+  // True while a change is made for a caller that tries again by itself (see unheld above). The changes are made in
+  // one go, without a pause in which another could begin, so one flag is enough.
+  let quick = false;
+  function quickly(change) { const before = quick; quick = true; try { return change(); } finally { quick = before; } }
   // Bookkeeping must never turn a change that already happened into a reported failure.
   const event = (project, type, data) => {
     try { store?.event(type, { id: project.id, projectId: project.id }, data); return null; }
     catch (failure) { return 'The change was made, but recording it in history failed: ' + failure.message; }
   };
   const invoke = (file, args, cwd, input = {}, environment = toolEnvironment()) => executeCommand(resolveTool(file), args, {
-    cwd, shell: false, environment, signal: input.signal || null,
+    cwd, shell: false, environment, signal: input.signal || null, enough: input.enough === true,
     timeoutMs: bounded(input.timeoutMs, 30000, 300000), maxOutputChars: bounded(input.maxOutputChars, 120000, 2000000)
   });
   // Read-only Git that cannot run anything the repository itself configures:
@@ -268,13 +337,13 @@ export function createWorkspaceService({ store } = {}) {
     const entries = fs.readdirSync(full, { withFileTypes: true });
     if (entries.length > MAX_DIRECTORY_ENTRIES) throw error('scan_limit', 'Directory has too many entries; use workspace_find with a pattern.');
     const limit = bounded(input.limit, 200, 1000);
-    const items = [];
+    const items = [], verified = new Map();
     let withheld = 0;
     for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
       if (entry.name <= after || entry.name.startsWith('.devmate-write-') || entry.name === '.git') continue;
       const childRel = path.posix.join(rel, entry.name);
       // What cannot be read is not listed either, but it is counted: an entry that silently is not there sends a model looking for it.
-      if (hidden(project, childRel) || !listable(project, childRel, { links: true })) { withheld++; continue; }
+      if (hidden(project, childRel) || !listable(project, childRel, { links: true, verified })) { withheld++; continue; }
       const stat = fs.statSync(path.join(full, entry.name), { throwIfNoEntry: false });
       if (!stat || (!stat.isFile() && !stat.isDirectory())) { withheld++; continue; }
       items.push({ name: entry.name, path: slash(childRel), type: stat.isDirectory() ? 'directory' : 'file', size: stat.size });
@@ -386,7 +455,7 @@ export function createWorkspaceService({ store } = {}) {
     return { path: rel, text: selected.join('\n'), sha256, totalLines, startLine, endLine,
       truncated: longLine !== null || endLine < totalLines, partial: startLine > 1 || endLine < totalLines, ...(endLine < totalLines ? { nextStartLine: endLine + 1 } : {}),
       ...(foreign ? { encoding } : {}),
-      ...(longLine !== null || foreign ? { ...(longLine !== null ? { cutLine: longLine } : {}), note: [foreign, longLine !== null ? 'Line ' + longLine + ' is longer than ' + pageChars + ' characters and was cut; its bytes can be paged with operations_call workspace.read_bytes.' : null].filter(Boolean).join(' ') } : {}) };
+      ...(longLine !== null || foreign ? { ...(longLine !== null ? { cutLine: longLine } : {}), note: [foreign, longLine !== null ? 'Line ' + longLine + ' is longer than ' + pageChars + ' characters and was cut; its bytes can be paged with operations_query workspace.read_bytes.' : null].filter(Boolean).join(' ') } : {}) };
   }
 
   function readBytePage(project, input = {}) {
@@ -429,6 +498,40 @@ export function createWorkspaceService({ store } = {}) {
     if (typeof input.text !== 'string' || Buffer.byteLength(input.text) > MAX_FILE_BYTES || input.text.includes('\0')) throw error('invalid_input', 'A UTF-8 text value up to 8 MiB is required.');
     const expected = input.expectedSha256 ?? null;
     if (expected !== null && (typeof expected !== 'string' || !/^[a-f0-9]{64}$/i.test(expected))) throw error('invalid_input', 'expectedSha256 is the sha256 returned by workspace_read.');
+    // append: the text goes to the end of what is there, which is kept like before any change. A file that is not
+    // there is created. It says nothing about what the file holds, so it takes no expectedSha256 and no overwrite.
+    if (input.append) {
+      if (expected !== null || input.overwrite) throw error('invalid_input', 'append adds to what the file holds: it takes neither expectedSha256 nor overwrite.');
+      const rel = relativeInput(input.path), full = resolveProjectPath(project, rel, { mustExist: false });
+      // (A file with a second name is refused here as by every write: its bytes are shared with a path that may lie
+      // outside the project.)
+      const current = fs.existsSync(full) ? readBytes(full) : null;
+      if (current?.includes(0)) throw error('invalid_input', 'append is for text files; this one holds binary data.');
+      // What is added is UTF-8. A file in another encoding would hold two after it, which nothing reads: refused in
+      // the words workspace_edit refuses it with.
+      if (current) textBytes(current);
+      const added = Buffer.from(input.text);
+      if ((current?.length || 0) + added.length > MAX_FILE_BYTES) throw error('invalid_input', 'The file would grow beyond 8 MiB.');
+      // A file that is not there is made as every new file is.
+      if (!current) return publish(project, rel, added, null);
+      if (!added.length) return { path: rel, sha256: hash(current), written: false };
+      if (!writableFile(full)) throw readOnlyFile(rel);
+      const previousSha256 = snapshot(project, current);
+      // The text goes to the end of the file itself, where it is. A program that has the file open to write to it (a
+      // server and its log) goes on writing to the same file; replaced, as every other write replaces a file, that
+      // program would be left writing to the one that was moved away, and nothing it wrote would be seen again.
+      unheld(quick, rel, full, () => fs.appendFileSync(full, added));
+      // What the file holds now, which is more than was added here when that program wrote meanwhile. From here on
+      // the text is in the file: where it cannot be read back (that program has pushed it past what is read, or holds
+      // it this moment) the call still says "written", without a hash, and never fails after the fact, which would
+      // have the text added a second time.
+      let sha256 = null;
+      try { sha256 = hash(readBytes(full)); } catch { /* said below */ }
+      const result = { path: rel, ...(sha256 ? { sha256 } : {}), written: true };
+      const warning = event(project, 'workspace.file.written', { ...result, sha256, previousSha256 });
+      const note = sha256 ? null : 'The text was added. What the file holds now could not be read back (another program may be writing to it, or has it open, or has moved or replaced it since): no sha256 is given. Read the file again before changing it.';
+      return { ...result, ...(note ? { note } : {}), ...(warning ? { warning } : {}) };
+    }
     // overwrite: the caller means to replace whatever is there. What is there is still kept, like before any change.
     if (input.overwrite && expected === null) {
       const full = resolveProjectPath(project, input.path, { mustExist: false });
@@ -455,6 +558,7 @@ export function createWorkspaceService({ store } = {}) {
         : 'The file changed since it was read; read it again before writing.');
     }
     if (current?.equals(bytes)) return { path: rel, sha256: currentSha256, written: false };
+    keptReadOnly(rel, full);
     snapshot(project, current);
     const temp = path.join(parent, '.devmate-write-' + randomUUID());
     let fd;
@@ -466,14 +570,27 @@ export function createWorkspaceService({ store } = {}) {
       resolveProjectPath(project, rel, { mustExist: false });
       const latest = fs.existsSync(full) ? readBytes(full) : null;
       if ((latest === null ? null : hash(latest)) !== currentSha256) throw error('conflict', 'File changed before publication.');
-      if (current !== null) replaceFile(temp, full);
+      // A file that is in the way and open in another program is moved aside under a working copy's name (never
+      // listed), see replaceFile.
+      if (current !== null) unheld(quick, rel, full, () => replaceFile(temp, full, { aside: path.join(parent, '.devmate-write-' + randomUUID()), remove: removeAside, ...(quick ? { repeats: QUICK_REPEATS } : {}) }));
       else {
-        // Create must never replace a file that appeared meanwhile. Hard links do that
-        // atomically; filesystems without them (exFAT, some network shares) use an exclusive copy.
-        try { fs.linkSync(temp, full); }
+        // Create must never replace a file that appeared meanwhile. A second name for the working copy does that at
+        // once and whole. Not on Windows: the new file would be the very file a scanner has opened as the working
+        // copy, and Windows replaces no file that anyone has open. Measured on a busy computer, 19 of 2400 files
+        // made that way could not be replaced a moment later, for a minute and more; of 2400 made as files of their
+        // own, none. So there, and on filesystems without second names (exFAT, some network shares), it is an
+        // exclusive copy.
+        const copied = () => {
+          try { fs.copyFileSync(temp, full, fs.constants.COPYFILE_EXCL); }
+          catch (failure) { throw failure.code === 'EEXIST' ? error('conflict', 'File changed before publication.') : failure; }
+          // The working copy was written through to the disk; its copy is too, where the system lets it be.
+          try { const made = fs.openSync(full, 'r+'); try { fs.fsyncSync(made); } finally { fs.closeSync(made); } } catch { /* written, and flushed by the system in its own time */ }
+        };
+        if (WINDOWS) copied();
+        else try { fs.linkSync(temp, full); }
         catch (failure) {
           if (failure.code === 'EEXIST') throw error('conflict', 'File changed before publication.');
-          fs.copyFileSync(temp, full, fs.constants.COPYFILE_EXCL);
+          copied();
         }
       }
     } finally {
@@ -580,6 +697,8 @@ export function createWorkspaceService({ store } = {}) {
         : takeBack(project, { since }).left.map(item => item.path + ' (' + item.reason + ')');
       failure.message = 'The patch was not applied: ' + failure.message +
         (left.length ? ' These changes of it could not be taken back and are still there: ' + left.join('; ') + '.' : ' Nothing of it was kept.');
+      // With something of it still there the same patch no longer fits: it is not to be tried again as it is.
+      if (left.length) failure.incomplete = true;
       throw failure;
     }
     return { files: shown, ...totals, ...(since !== null ? { since } : {}), ...(warning ? { warning } : {}) };
@@ -634,9 +753,12 @@ export function createWorkspaceService({ store } = {}) {
     let replacedSha256 = null;
     if (targetStat) {
       if (!input.overwrite || !sourceStat.isFile() || !targetStat.isFile()) throw error('already_exists', 'Destination exists. Only a file can replace a file, with overwrite:true.');
+      keptReadOnly(to, target);
       replacedSha256 = snapshot(project, readBytes(target));
     }
-    fs.renameSync(source, caseOnly ? path.join(path.dirname(source), path.posix.basename(to)) : target);
+    // With a file in the way either of the two may be the one a program holds: the refusal names both.
+    unheld(quick, targetStat ? from + ' or ' + to : from, source, () => replaceFile(source, caseOnly ? path.join(path.dirname(source), path.posix.basename(to)) : target,
+      { repeats: quick ? QUICK_REPEATS : 0, ...(targetStat ? { aside: path.join(parent, '.devmate-write-' + randomUUID()), remove: removeAside } : {}) }), to);
     const result = { from, to, type: sourceStat.isDirectory() ? 'directory' : 'file' };
     const warning = event(project, 'workspace.file.moved', { from, path: to, entry: result.type, ...(replacedSha256 ? { previousSha256: replacedSha256 } : {}) });
     return warning ? { ...result, warning } : result;
@@ -660,8 +782,9 @@ export function createWorkspaceService({ store } = {}) {
       if (stat.nlink === 1 && stat.size > DELETE_SNAPSHOT_BYTES && !input.force) {
         throw error('too_large_to_keep', 'This file is ' + Math.round(stat.size / 1048576) + ' MiB, more than DevMate keeps for undo. Pass force:true to delete it without a restorable copy.');
       }
+      keptReadOnly(rel, full);
       const previousSha256 = keep(full);
-      fs.unlinkSync(full);
+      unheld(quick, rel, full, () => fs.unlinkSync(full));
       const warning = event(project, 'workspace.file.removed', { path: rel, entry: 'file', previousSha256 });
       return { path: rel, removed: true, type: 'file', restorable: !!previousSha256, ...(previousSha256 ? { previousSha256 } : {}), ...(warning ? { warning } : {}) };
     }
@@ -682,7 +805,17 @@ export function createWorkspaceService({ store } = {}) {
       if (!failure) warning ||= event(project, 'workspace.file.removed', { path: rel, entry: 'directory', files: contents.length });
     };
     if (store?.transaction) store.transaction(record); else record();
-    if (failure) throw failure;
+    if (failure) {
+      const gone = contents.filter(item => !fs.existsSync(item.full)), back = kept.filter(item => !fs.existsSync(item.full)).length;
+      // Nothing of it is gone: where it is Windows not letting go of a file, that is a thing to try again.
+      if (!gone.length) throw quick && WINDOWS && HELD.includes(failure.code) ? busy(rel) : failure;
+      // Part of it is gone, and is said with its number and with whether it can be brought back: files deleted with
+      // force are not kept. It is not made again by itself, so that no later answer counts only what was left by then.
+      throw Object.assign(error('delete_incomplete', 'Only part of ' + rel + ' was deleted: ' + gone.length + ' of the ' + contents.length + ' file(s) in it are gone' +
+        (back === gone.length ? ' and can be brought back (workspace_history lists them)' : back ? ', ' + back + ' of which can be brought back (workspace_history lists them)' : ', and none of them was kept') +
+        '. Then this stopped it: ' + (WINDOWS && HELD.includes(failure.code) ? 'another program has a file in it open' : failure.message) + '. The rest is still there; the same call again deletes it once that is out of the way.',
+      { deleted: gone.length, restorable: back, remaining: contents.length - gone.length }), { incomplete: true });
+    }
     return { path: rel, removed: true, type: 'directory', files: contents.length, restorableFiles: kept.length,
       restorable: kept.length === contents.length, ...(warning ? { warning } : {}) };
   }
@@ -700,14 +833,16 @@ export function createWorkspaceService({ store } = {}) {
     return { ...(rel ? { path: rel } : {}), items };
   }
 
-  function restore(project, input = {}) {
+  // recorded: the version was just read from this project's own history (takeBack), so the history is not searched
+  // for it again. That search reads every entry of the project, once for each file that is taken back.
+  function restore(project, input = {}, { recorded = false } = {}) {
     writable(project);
     if (input.since !== undefined) return takeBack(project, input);
     if (input.path === undefined) throw error('invalid_input', 'Give path and sha256 of one version from workspace_history, or since to take back every change after one history entry.');
     if (typeof input.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(input.sha256)) throw error('invalid_input', 'sha256 must identify a version from workspace_history.');
     const stored = snapshotPath(project, input.sha256);
     // The store is shared by content hash; a version is restorable only where this project recorded it.
-    if (!stored || !fs.existsSync(stored) || !store?.hasFileVersion?.(project.id, HISTORY_EVENTS, input.sha256)) throw error('not_found', 'That version is not kept in this project\'s DevMate history.');
+    if (!stored || !fs.existsSync(stored) || !(recorded || store?.hasFileVersion?.(project.id, HISTORY_EVENTS, input.sha256))) throw error('not_found', 'That version is not kept in this project\'s DevMate history.');
     const bytes = fs.readFileSync(stored);
     if (hash(bytes) !== input.sha256) throw error('history_corrupt', 'Stored history does not match its hash.');
     const rel = relativeInput(input.path);
@@ -738,22 +873,24 @@ export function createWorkspaceService({ store } = {}) {
           // A rename that only changed the case of the name is the same entry under both names.
           if (present(item.from) && at(item.from) !== at(item.path)) throw leave('something is at ' + item.from + ' now');
           move(project, { from: item.path, to: item.from });
-          if (item.previousSha256) restore(project, { path: item.path, sha256: item.previousSha256 });
+          if (item.previousSha256) restore(project, { path: item.path, sha256: item.previousSha256 }, { recorded: true });
           restored.push({ ...step, action: 'moved back', to: item.from });
         } else if (item.type === 'workspace.file.removed') {
           // The files of a deleted folder are entries of their own; bringing them back brings the folders back.
           if (item.entry === 'directory') continue;
           if (present(item.path)) throw leave('something is at this path now');
           if (!item.previousSha256) throw leave('no copy was kept when it was deleted');
-          restore(project, { path: item.path, sha256: item.previousSha256 });
+          restore(project, { path: item.path, sha256: item.previousSha256 }, { recorded: true });
           restored.push({ ...step, action: 'brought back' });
         } else {
           const stat = present(item.path);
-          // A file whose content after the change is not known (too large to have been read) cannot be told from one
-          // that was changed since: it is left alone, never taken for unchanged.
-          if (stat?.isFile() && !item.sha256) throw leave('what this change wrote was too large to be recorded, so it cannot be told whether it was changed since');
+          // A file whose content after the change is not known (too large to have been read, or not readable at that
+          // moment) cannot be told from one that was changed since: it is left alone, never taken for unchanged. Also
+          // where nothing is under its name any more: that it is gone is a change too, and what was there before is
+          // not made anew on the ground that nothing matches nothing.
+          if (!item.sha256) throw leave('what this change wrote was not recorded (it was too large, or could not be read back), so it cannot be told whether it was changed since');
           if ((stat?.isFile() ? contentHash(at(item.path), stat.size) : null) !== item.sha256) throw leave('it was changed again by something else');
-          if (item.previousSha256) { restore(project, { path: item.path, sha256: item.previousSha256 }); restored.push({ ...step, action: 'restored' }); }
+          if (item.previousSha256) { restore(project, { path: item.path, sha256: item.previousSha256 }, { recorded: true }); restored.push({ ...step, action: 'restored' }); }
           else { remove(project, { path: item.path }); restored.push({ ...step, action: 'removed again (this change created it)' }); }
         }
       } catch (failure) { left.push({ ...step, reason: failure.left ? failure.message : (failure.code ? failure.code + ': ' : '') + failure.message }); }
@@ -767,7 +904,9 @@ export function createWorkspaceService({ store } = {}) {
   function scanArguments(input) {
     const glob = input.glob;
     if (glob !== undefined && (typeof glob !== 'string' || !glob || glob.length > 500 || /[\0\r\n]/.test(glob))) throw error('invalid_input', 'A glob pattern of up to 500 characters is required.');
-    const args = ['--no-config', '--color', 'never', '--hidden', '--no-require-git', '--sort', 'path',
+    // ripgrep is not asked to sort: sorted, it reads the tree on one thread, several times slower on a large one
+    // (measured on eleven thousand files: 6 seconds against 0.7). What it reports is put in order here (inOrder).
+    const args = ['--no-config', '--color', 'never', '--hidden', '--no-require-git',
       ...(WINDOWS ? ['--glob-case-insensitive'] : [])];
     if (input.includeIgnored) args.push('--no-ignore');
     if (glob) args.push('--glob', slash(glob).replace(/^\.\//, ''));
@@ -775,6 +914,16 @@ export function createWorkspaceService({ store } = {}) {
     for (const name of input.includeIgnored ? ['.git'] : skippedDirectories) args.push('--glob', '!' + name);
     return args;
   }
+  // By path, folder by folder and name by name, as ripgrep's own sorting gave them: the separator counts as less than
+  // any letter, and letters are compared as ripgrep compares them, by their number among all characters. (A string
+  // here is compared by its 16-bit units, which puts a character beyond the first 65536, an emoji for one, before
+  // some that come earlier: where a name holds such units they are moved to where they belong for the comparison.)
+  // What the order is made of is worked out once for each entry.
+  // (The units from 0xD800 up: the halves of such a character, and the characters that come after the halves.)
+  const HIGH = new RegExp('[' + String.fromCharCode(0xd800) + '-' + String.fromCharCode(0xffff) + ']', 'g');
+  const ranked = unit => String.fromCharCode(unit.charCodeAt(0) + (unit.charCodeAt(0) >= 0xe000 ? -0x800 : 0x2000));
+  const inOrder = (entries, pathOf) => entries.map(entry => [pathOf(entry).replaceAll('/', '\0').replace(HIGH, ranked), entry])
+    .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0).map(pair => pair[1]);
   // Null when the file may not be shown; otherwise what one look at it told (its size).
   function visibleFile(project, file, cache) {
     if (!cache.has(file)) {
@@ -787,7 +936,13 @@ export function createWorkspaceService({ store } = {}) {
     }
     return cache.get(file);
   }
+  // What a scan is run with: ripgrep is ended once it has reported more than is ever shown. A search for a common word
+  // in a large tree otherwise goes on to write a hundred megabytes that are read and thrown away (measured: over ten
+  // seconds for an answer that was complete after a twentieth of one). What is shown then is a part of what matches,
+  // not the same part every time, and marked as cut.
+  const scanned = input => ({ ...input, maxOutputChars: scanChars, enough: true });
   function scanFailure(result, produced) {
+    if (result.endedFull) return;
     // ripgrep exits 1 for "no matches" and 2 when some path could not be read.
     if (result.error || result.timedOut || ![0, 1, 2].includes(result.exitCode) || (result.exitCode === 2 && !produced)) {
       throw error('command_failed', 'The search did not finish successfully.' + (result.stderr ? ' ' + result.stderr.trim().split(/\r?\n/)[0].slice(0, 300) : ''),
@@ -800,12 +955,13 @@ export function createWorkspaceService({ store } = {}) {
     if (!fs.statSync(resolveProjectPath(project, base)).isDirectory()) throw error('not_directory', 'Find requires a directory.');
     const limit = bounded(input.limit, 200, 2000), items = [], cache = new Map();
     let withheld = 0;
-    const result = await invoke('rg', ['--files', ...scanArguments({ ...input, glob: input.pattern }), '--', base], projectRoot(project), { ...input, maxOutputChars: 2000000 });
+    const result = await invoke('rg', ['--files', ...scanArguments({ ...input, glob: input.pattern }), '--', base], projectRoot(project), scanned(input));
     scanFailure(result, !!result.stdout);
     let truncated = result.stdoutTruncated;
-    for (const line of result.stdout.split(/\r?\n/)) {
-      const file = slash(line).replace(/^\.\//, '');
-      if (!file) continue;
+    const lines = result.stdout.split(/\r?\n/);
+    // Where the list was cut, its last line is a piece of a path.
+    if (truncated) lines.pop();
+    for (const file of inOrder(lines.map(line => slash(line).replace(/^\.\//, '')).filter(Boolean), file => file)) {
       const seen = visibleFile(project, file, cache);
       if (!seen) { withheld++; continue; }
       if (items.length >= limit) { truncated = true; break; }
@@ -822,18 +978,21 @@ export function createWorkspaceService({ store } = {}) {
     const args = ['--json', '--max-filesize', String(READ_FILE_BYTES), '--max-count', String(limit), ...scanArguments(input)];
     if (!input.regex) args.push('--fixed-strings');
     if (input.ignoreCase) args.push('--ignore-case');
-    const result = await invoke('rg', [...args, '-e', input.query, '--', base], projectRoot(project), { ...input, maxOutputChars: 2000000 });
+    const result = await invoke('rg', [...args, '-e', input.query, '--', base], projectRoot(project), scanned(input));
     scanFailure(result, result.stdout.includes('"type":"match"'));
     let truncated = result.stdoutTruncated;
+    const hits = [];
     for (const line of result.stdout.split(/\r?\n/)) {
       if (!line) continue;
       let record; try { record = JSON.parse(line); } catch { truncated = true; continue; }
       if (record.type !== 'match' || !record.data.path.text || typeof record.data.lines.text !== 'string') continue;
-      const file = slash(record.data.path.text).replace(/^\.\//, '');
-      if (!visibleFile(project, file, cache)) continue;
+      hits.push({ path: slash(record.data.path.text).replace(/^\.\//, ''), line: record.data.line_number, text: record.data.lines.text.replace(/\r?\n$/, '') });
+    }
+    // The hits of a file come together and in the order of its lines; the files are put in order here.
+    for (const hit of inOrder(hits, hit => hit.path)) {
+      if (!visibleFile(project, hit.path, cache)) continue;
       if (items.length === limit) { truncated = true; break; }
-      const hit = record.data.lines.text.replace(/\r?\n$/, '');
-      items.push({ path: file, line: record.data.line_number, text: hit.length > 2000 ? hit.slice(0, 2000) + ' [line cut; ' + hit.length + ' characters]' : hit });
+      items.push({ path: hit.path, line: hit.line, text: hit.text.length > 2000 ? hit.text.slice(0, 2000) + ' [line cut; ' + hit.text.length + ' characters]' : hit.text });
     }
     return { items, truncated };
   }
@@ -842,13 +1001,13 @@ export function createWorkspaceService({ store } = {}) {
   async function gitStatus(project, input = {}) {
     const result = checkedCommand(await git(project, ['status', '--porcelain=v1', '-z', '--untracked-files=normal'], input));
     if (result.stdoutTruncated) throw error('output_limit', 'Git status exceeds the output bound.');
-    const records = result.stdout.split('\0'), items = [];
+    const records = result.stdout.split('\0'), items = [], verified = new Map();
     for (let i = 0; i < records.length; i++) {
       const record = records[i]; if (!record) continue;
       const status = record.slice(0, 2), file = slash(record.slice(3)).replace(/\/$/, '');
       const originalPath = /[RC]/.test(status) ? slash(records[++i] || '') : null;
       // Entries Git reports but DevMate cannot address (links, instance storage, device names) are left out, not fatal.
-      if (!listable({ ...project, protectSecrets: false }, file, { mustExist: false })) continue;
+      if (!listable({ ...project, protectSecrets: false }, file, { mustExist: false, verified })) continue;
       const guarded = hidden(project, file) || (originalPath ? hidden(project, originalPath) : false);
       items.push({ path: file, status, ...(originalPath ? { originalPath } : {}), ...(guarded ? { protected: true } : {}) });
     }
@@ -859,8 +1018,8 @@ export function createWorkspaceService({ store } = {}) {
   async function changedPaths(project, args, input, scopes = []) {
     const names = checkedCommand(await git(project, [...args, '--name-only', '-z', ...(scopes.length ? ['--', ...scopes] : [])], { ...input, maxOutputChars: 2000000 }));
     if (names.stdoutTruncated) throw error('output_limit', 'The changed-file list exceeds the output bound; name the paths you need.');
-    const all = names.stdout.split('\0').map(item => item.trim()).filter(Boolean);
-    const shown = all.filter(item => !hidden(project, item) && listable(project, item, { mustExist: false }));
+    const all = names.stdout.split('\0').map(item => item.trim()).filter(Boolean), verified = new Map();
+    const shown = all.filter(item => !hidden(project, item) && listable(project, item, { mustExist: false, verified }));
     return { shown, omitted: all.length - shown.length };
   }
   // A diff is read from the top, so an oversized one keeps its beginning and says what is missing.
@@ -886,19 +1045,22 @@ export function createWorkspaceService({ store } = {}) {
   // the last commit. A new file that Git does not ignore counts as added. With since:'last_review' what was already
   // shown and marked (markReviewed) is left out, judged by each file's content now: nothing new, nothing shown.
   async function changes(project, input = {}) {
-    if ((await git(project, ['rev-parse', '--is-inside-work-tree'], input)).exitCode !== 0)
+    // Three questions that do not wait for one another; each is a process of its own.
+    const [inside, head, listed] = await Promise.all([git(project, ['rev-parse', '--is-inside-work-tree'], input), git(project, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], input),
+      git(project, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { ...input, maxOutputChars: 2000000 })]);
+    if (inside.exitCode !== 0)
       throw error('not_a_repository', 'This project is not a Git repository, so there is no commit to compare it with. workspace_history lists what DevMate\'s own tools changed here, and workspace_restore takes it back.');
-    const base = (await git(project, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], input)).exitCode === 0 ? 'HEAD' : EMPTY_TREE;
-    const status = checkedCommand(await git(project, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { ...input, maxOutputChars: 2000000 }));
+    const base = head.exitCode === 0 ? 'HEAD' : EMPTY_TREE;
+    const status = checkedCommand(listed);
     if (status.stdoutTruncated) throw error('output_limit', 'Too many files changed to list them here; look at them with git_status and git_diff.');
-    const files = new Map(), untracked = new Set();
+    const files = new Map(), untracked = new Set(), verified = new Map();
     let omittedProtected = 0;
     const records = status.stdout.split('\0');
     for (let index = 0; index < records.length; index++) {
       const record = records[index]; if (!record) continue;
       const code = record.slice(0, 2), file = slash(record.slice(3)), previousPath = /[RC]/.test(code) ? slash(records[++index] || '') : null;
       if (hidden(project, file) || (previousPath && hidden(project, previousPath))) { omittedProtected++; continue; }
-      if (!listable(project, file, { mustExist: false })) continue;
+      if (!listable(project, file, { mustExist: false, verified })) continue;
       if (code === '??') untracked.add(file);
       files.set(file, { path: file, ...(previousPath ? { previousPath } : {}), type: code === '??' || code.includes('A') ? 'added' : code.includes('D') ? 'deleted' : previousPath ? 'renamed' : 'modified', additions: 0, removals: 0 });
     }
@@ -912,17 +1074,20 @@ export function createWorkspaceService({ store } = {}) {
         if (file) Object.assign(file, added === '-' ? { binary: true } : { additions: Number(added), removals: Number(removed) });
       }
     }
+    // Looked at once more now that nothing is waited for any longer: the files are read from where the project is at
+    // this moment, not from where it was before Git was asked.
+    const root = projectRoot(project);
     // What a file holds now, in a form that is cheap to compare later.
     const state = item => {
-      const stat = item.type === 'deleted' ? null : fs.lstatSync(path.join(projectRoot(project), item.path), { throwIfNoEntry: false });
+      const stat = item.type === 'deleted' ? null : fs.lstatSync(path.join(root, item.path), { throwIfNoEntry: false });
       if (!stat?.isFile()) return 'absent';
-      return stat.size <= MAX_FILE_BYTES ? hash(readRegular(path.join(projectRoot(project), item.path), { linked: true })) : stat.size + ':' + stat.mtimeMs;
+      return stat.size <= MAX_FILE_BYTES ? hash(readRegular(path.join(root, item.path), { linked: true })) : stat.size + ':' + stat.mtimeMs;
     };
     for (const item of files.values()) {
       item.state = state(item);
       // Git counts no lines for a file it does not track yet.
       if (untracked.has(item.path) && item.state.length === 64) {
-        const bytes = readRegular(path.join(projectRoot(project), item.path), { linked: true });
+        const bytes = readRegular(path.join(root, item.path), { linked: true });
         if (bytes.includes(0)) item.binary = true; else if (bytes.length) item.additions = bytes.toString('utf8').split('\n').length - (bytes.at(-1) === 10 ? 1 : 0);
       }
     }
@@ -945,8 +1110,15 @@ export function createWorkspaceService({ store } = {}) {
   const gitChange = (cwd, args, input = {}, extra = {}) => invoke('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=' + gitNull, '-c', 'core.quotePath=false',
     '-c', 'color.ui=false', '-c', 'commit.gpgsign=false', ...(WINDOWS ? ['-c', 'core.longpaths=true'] : []), ...args], cwd, { timeoutMs: 120000, ...input },
   { ...toolEnvironment(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_PAGER: 'cat', PAGER: 'cat', ...extra });
-  // The copy as a project of its own for reading: the same rules about what may be shown, another folder.
-  const inCopy = (project, copy) => ({ ...project, root: copy.root, controlRoot: null });
+  // Where this runtime keeps the copies of a project: beside its instance directory.
+  const copiesRoot = project => path.join(path.dirname(project.controlRoot), path.basename(project.controlRoot) + '-copies');
+  // The copy as a project of its own for reading: the same rules about what may be shown, another folder. That folder
+  // is one of the runtime's own copies or it is not read: what lets it past the rule for shared folders is where it is.
+  const inCopy = (project, copy) => {
+    const root = path.resolve(String(copy?.root || '')), name = project.controlRoot ? path.relative(copiesRoot(project), root) : '';
+    if (!/^[A-Za-z0-9-]{1,80}$/.test(name)) throw error('invalid_input', 'This is not a working copy this DevMate made for an agent.');
+    return { ...project, root, controlRoot: null, [OWN_COPY]: true };
+  };
   const copyExists = copy => { if (!copy?.root || !fs.existsSync(copy.root)) throw error('not_found', 'This agent has no working copy of its own (any more).'); };
 
   async function isolate(project, name) {
@@ -954,7 +1126,10 @@ export function createWorkspaceService({ store } = {}) {
     if (!/^[A-Za-z0-9-]{1,80}$/.test(name) || !project.controlRoot) throw error('invalid_input', 'A working copy needs a plain name.');
     const head = await git(project, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']), base = head.stdout.trim();
     if (head.exitCode !== 0 || !/^[a-f0-9]{40,64}$/.test(base)) throw error('not_a_repository', 'A copy of its own needs a Git repository with at least one commit: what the agent proposes is what differs from that commit.');
-    const root = path.join(path.dirname(project.controlRoot), path.basename(project.controlRoot) + '-copies', name), branch = 'devmate/' + name;
+    // A project that is one folder of a larger repository gets no copy (folderInRepository says why).
+    const within = await folderInRepository(project);
+    if (within) throw error('not_repository_root', 'A copy of its own needs the project to be the top folder of its Git repository: this project is the folder ' + within + ' inside one. Delegate without isolate, or share the repository\'s top folder as the project.');
+    const root = path.join(copiesRoot(project), name), branch = 'devmate/' + name;
     fs.mkdirSync(path.dirname(root), { recursive: true, mode: 0o700 });
     checkedCommand(await gitChange(projectRoot(project), ['worktree', 'add', '--quiet', '-b', branch, root, base]));
     // What is not committed is not in the copy; whoever delegates is told how much that is.
@@ -964,6 +1139,7 @@ export function createWorkspaceService({ store } = {}) {
   // What the copy holds that the commit it started from does not, files the agent created included.
   async function proposal(project, copy, input = {}) {
     copyExists(copy);
+    await ofWholeProject(project, copy);
     const view = inCopy(project, copy), base = ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-renames', copy.base];
     // The copy's index is the agent's, and the agent may be running Git this very moment: what it proposes is worked
     // out in an index of its own, started from the copy's so that only what changed is read again.
@@ -986,24 +1162,71 @@ export function createWorkspaceService({ store } = {}) {
     } finally { for (const file of [scratch, scratch + '.lock']) fs.rmSync(file, { force: true }); }
   }
 
-  async function removeCopy(project, copy) {
-    const root = projectRoot(project);
+  // The copy stands beside the instance directory and does not need the project's folder. leaving: the project
+  // itself is being taken off the list. Where its folder is gone then (it was moved), the copy is removed all the
+  // same: nothing would ever remove it afterwards. What stays is in the repository, wherever it is now: its note of
+  // this worktree and the branch, which only Git there can remove. Anyone else who throws a copy away while the
+  // folder is not there (a drive that is not connected) is refused as before: the copy and its record stay, and
+  // agents.discard clears all of it once the folder is back. (Nothing calls it again by itself: where the copy of an
+  // agent that never ran could not be removed, the agent says so, see neverRan.)
+  async function removeCopy(project, copy, { leaving = false } = {}) {
+    let root = null;
+    try { root = projectRoot(project); } catch (failure) { if (!leaving || failure.code !== 'project_missing') throw failure; }
+    // Before Git or anything else is asked to remove it: only a folder that is one of this runtime's own copies. (A
+    // record that names another folder, another worktree of the same repository among them, is not acted on.)
+    inCopy(project, copy);
     if (fs.existsSync(copy.root)) {
-      const removed = await gitChange(root, ['worktree', 'remove', '--force', copy.root]);
+      // Where the owner has switched on Git's own file watcher (core.fsmonitor), the agent's Git starts one in the
+      // copy, and it stays when the agent has gone, with the folder open (seen with the real Codex on Windows, where
+      // such a folder cannot be removed). It is told to end first. A Git that has none, and a copy nobody watches,
+      // answer with an error that says nothing here.
+      await gitChange(copy.root, ['fsmonitor--daemon', 'stop'], { timeoutMs: 15000 }).catch(() => {});
+      const removed = root ? await gitChange(root, ['worktree', 'remove', '--force', copy.root]) : null;
       // Whatever Git would not remove (a file held open by a program that is still running) must not be reported as gone.
-      if (removed.exitCode !== 0 && fs.existsSync(copy.root)) {
+      if (removed?.exitCode !== 0 && fs.existsSync(copy.root)) {
         try { fs.rmSync(copy.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
         catch { throw error('copy_in_use', 'The working copy is still in use and could not be removed. Stop the agent (agents.stop) and try again.'); }
       }
     }
+    if (!root) return;
     await gitChange(root, ['worktree', 'prune']);
     await gitChange(root, ['branch', '-D', copy.branch]);
   }
+
+  // One file as it was before something was applied to it (was: whether it existed, the hash it was kept under and
+  // its mode). False where that cannot be done: it existed and was not kept (a link, a file with a second name, one
+  // that could not be looked at). Only a file that was seen not to be there is removed.
+  function putBack(project, file, was) {
+    const full = resolveProjectPath(project, file, { mustExist: false }), stat = fs.lstatSync(full, { throwIfNoEntry: false });
+    if (!was.existed) { if (stat) fs.rmSync(full, { force: true }); return true; }
+    if (!was.sha256) return false;
+    const same = stat?.isFile() && contentHash(full, stat.size) === was.sha256;
+    if (!same) { fs.mkdirSync(path.dirname(full), { recursive: true }); fs.copyFileSync(snapshotPath(project, was.sha256), full); }
+    // The mode as well as the bytes. What is kept is kept for the owner alone (0600), and a copy takes that mode with
+    // it; and Git may have changed nothing of a file but its mode (a script that was made to run). Either way the
+    // file gets back the mode it had, or Git would show a change where "as it was" was said.
+    if (!WINDOWS && (!same || (stat.mode & 0o777) !== was.mode)) fs.chmodSync(full, was.mode);
+    return true;
+  }
+  // A copy is a worktree, which is the whole repository. Of a project that is one folder of a repository nothing here
+  // would be right: the agent would stand in the repository's top folder, Git applies a patch from inside a folder
+  // to that folder only and is silent about the rest, and what was applied would be looked for one folder too deep.
+  // The folder such a project is inside its repository, or '' where it is the top.
+  const folderInRepository = async project => (await git(project, ['rev-parse', '--show-prefix'])).stdout.trim().replace(/\/$/, '');
+  // A copy that was made for such a project before that was refused may still be there, for an agent that was never
+  // settled. It is neither shown nor applied (what lies outside the folder would be lost, and the copy removed with
+  // it); it can be discarded.
+  const ofWholeProject = async (project, copy) => {
+    const within = await folderInRepository(project);
+    if (within) throw error('not_repository_root', 'This agent\'s copy is of a whole Git repository, of which the project is only the folder ' + within + ': what the agent did cannot be shown or applied rightly from here. ' +
+      'Its work is in ' + copy.root + ' (branch ' + copy.branch + '): commit it there and merge it with Git yourself, or drop it with agents.discard.');
+  };
 
   // The agent's work arrives in the project as changes in the working tree, not as a commit: the person reviews and
   // commits it like their own. All of it or none of it; on success the copy has done its job and is removed.
   async function applyProposal(project, copy) {
     writable(project); copyExists(copy);
+    await ofWholeProject(project, copy);
     const view = inCopy(project, copy);
     checkedCommand(await gitChange(copy.root, ['add', '--all', '.']));
     const names = checkedCommand(await git(view, ['diff', '--cached', '--no-renames', '--name-only', '-z', copy.base], { maxOutputChars: 2000000 }));
@@ -1018,8 +1241,12 @@ export function createWorkspaceService({ store } = {}) {
         const full = resolveProjectPath(project, file, { mustExist: false }), stat = fs.lstatSync(full, { throwIfNoEntry: false });
         if (!stat) return [file, { existed: false, sha256: null }];
         // A file with a second name shares its bytes with a path that may lie outside the project: never copied into history.
-        return [file, { existed: true, sha256: !stat.isFile() || stat.nlink !== 1 ? null : stat.size <= MAX_FILE_BYTES ? snapshot(project, readRegular(full)) : snapshotFile(project, full) }];
-      } catch { return [file, { existed: false, sha256: null }]; }
+        return [file, { existed: true, mode: stat.mode & 0o777, sha256: !stat.isFile() || stat.nlink !== 1 ? null : stat.size <= MAX_FILE_BYTES ? snapshot(project, readRegular(full)) : snapshotFile(project, full) }];
+      // What could not be looked at (a link in the way, a file a program holds for a moment, no room left to keep it)
+      // is not taken for a file that was not there: on that ground it would be deleted when the work is taken out
+      // again. It is there and not kept, and is named where that matters. Only a path below something that is a file
+      // (the work makes a folder of that file) is known to have nothing at it.
+      } catch (failure) { return [file, { existed: !['not_directory', 'ENOTDIR', 'ENOENT'].includes(failure?.code), sha256: null }]; }
     }));
     const patchFile = copy.root + '.patch';
     try {
@@ -1031,29 +1258,47 @@ export function createWorkspaceService({ store } = {}) {
         throw error('conflict', 'The project changed in the same places since the agent started, so its work does not apply cleanly. Nothing was applied. It is kept on the branch ' + copy.branch +
           ' (merge it with Git, or discard it with agents.discard). Git says: ' + String(fits.stderr || '').trim().split(/\r?\n/).slice(0, 3).join(' | ').slice(0, 400));
       }
-      checkedCommand(await gitChange(root, ['apply', '--whitespace=nowarn', patchFile]));
+      const brought = await gitChange(root, ['apply', '--whitespace=nowarn', patchFile]);
+      if (brought.exitCode !== 0) {
+        // Git had checked the patch and then could not write all of it: on Windows a file another program has open
+        // is neither replaced nor removed, and by then the files before it are written. All of it or none: what was
+        // written or removed is put back from what was kept above, so that the project is as it was and the work,
+        // which is still in the copy, can be applied again.
+        const stuck = files.filter(file => { try { return !putBack(project, file, before.get(file)); } catch { return true; } });
+        const said = String(brought.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(0, 3).join(' | ').slice(0, 400);
+        if (stuck.length) throw Object.assign(error('apply_incomplete', 'The agent\'s work could not be brought into the project whole, and part of it could not be taken out again: ' + stuck.slice(0, 10).join(', ') + (stuck.length > 10 ? ', …' : '') +
+          '. Look at these files (git diff). The work is still in the agent\'s copy. Git says: ' + said, { files: stuck }), { incomplete: true });
+        throw error('apply_failed', 'The agent\'s work could not be brought into the project: Git could not write all of it. On Windows that is a file another program has open. What had been written by then was put back: the project is as it was, and the work is still in the agent\'s copy. Apply it again when the file is let go. Git says: ' + said);
+      }
     } finally { fs.rmSync(patchFile, { force: true }); }
     let warning = null;
-    // What is applied and cannot be recorded: a link (never followed, so never read) and anything else that is no
-    // plain file. It is in the project like the rest, and taking the work back does not reach it: that is said.
+    // What is applied and cannot be recorded: a link (never followed, so never read), anything else that is no plain
+    // file, and a file that was there and was not kept (recorded as written, with nothing before it, it would be
+    // deleted when the work is taken back). It is in the project like the rest, and taking the work back does not
+    // reach it: that is said.
     const unrecorded = [];
     const record = () => {
       for (const file of files) {
         const was = before.get(file);
         let stat = null, full = null;
         try { full = resolveProjectPath(project, file, { mustExist: false }); stat = fs.lstatSync(full, { throwIfNoEntry: false }); } catch { unrecorded.push(file); continue; }
-        if (stat?.isFile()) warning ||= event(project, 'workspace.file.written', { path: file, sha256: contentHash(full, stat.size), written: true, previousSha256: was.sha256, proposal: copy.branch });
+        if (stat?.isFile() && was.existed && !was.sha256) unrecorded.push(file);
+        else if (stat?.isFile()) warning ||= event(project, 'workspace.file.written', { path: file, sha256: contentHash(full, stat.size), written: true, previousSha256: was.sha256, proposal: copy.branch });
         else if (!stat && was.existed) warning ||= event(project, 'workspace.file.removed', { path: file, entry: 'file', previousSha256: was.sha256, proposal: copy.branch });
         else if (stat) unrecorded.push(file);
       }
     };
     if (store?.transaction) store.transaction(record); else record();
-    await removeCopy(project, copy);
-    return { applied: true, files, ...(warning ? { warning } : {}),
-      ...(unrecorded.length ? { notInHistory: unrecorded, note: 'Applied, but not in the history (links and other entries that are no plain files): workspace_restore does not take these back. Use Git for them: ' + unrecorded.slice(0, 10).join(', ') + (unrecorded.length > 10 ? ', …' : '') } : {}) };
+    // The work is in the project from here on. A copy that cannot be removed yet does not make that untrue: it is said,
+    // with what is left and how it goes.
+    let left = null;
+    try { await removeCopy(project, copy); }
+    catch (failure) { if (failure.code !== 'copy_in_use') throw failure; left = 'The copy it came from could not be removed, because a program still uses its folder: ' + copy.root + '. When nothing uses it any more, delete that folder and run "git worktree prune" and "git branch -D ' + copy.branch + '" in the project.'; }
+    const notes = [unrecorded.length ? 'Applied, but not in the history (links, other entries that are no plain files, and files that were there and could not be kept): workspace_restore does not take these back. Use Git for them: ' + unrecorded.slice(0, 10).join(', ') + (unrecorded.length > 10 ? ', …' : '') : null, left].filter(Boolean);
+    return { applied: true, files, ...(warning ? { warning } : {}), ...(unrecorded.length ? { notInHistory: unrecorded } : {}), ...(left ? { copyLeft: true } : {}), ...(notes.length ? { note: notes.join(' ') } : {}) };
   }
-  async function discardProposal(project, copy) {
-    await removeCopy(project, copy);
+  async function discardProposal(project, copy, options) {
+    await removeCopy(project, copy, options);
     return { discarded: true, branch: copy.branch };
   }
 
@@ -1107,6 +1352,6 @@ export function createWorkspaceService({ store } = {}) {
     return { items, current: items.find(item => item.current)?.name || null };
   }
   const isRepository = project => fs.existsSync(path.join(projectRoot(project), '.git'));
-  return { files, read, readBytes: readBytePage, write, edit, applyPatch, changes, mkdir, move, remove, find, history, restore, search,
+  return { quickly, files, read, readBytes: readBytePage, write, edit, applyPatch, changes, mkdir, move, remove, find, history, restore, search,
     gitStatus, gitDiff, gitLog, gitShow, gitBlame, gitBranches, isRepository, isolate, proposal, applyProposal, discardProposal };
 }

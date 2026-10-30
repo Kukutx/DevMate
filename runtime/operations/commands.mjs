@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DomainError } from '../store.mjs';
+import { DomainError, withoutVariableValues as shown } from '../store.mjs';
 import { actor, commandShape, id, listOptions, mutation, oneCommand, projectScope, waitMs } from './shared.mjs';
 
 // Commands a caller runs and follows directly (shell.run, process.*), and durable jobs
@@ -53,17 +53,33 @@ export function defineCommandOperations(service, add) {
           '. A command job takes what shell_run takes (command, or file with args, cwd, timeoutMs); a capability job takes what capability_call takes.');
       }
       delete parsed.operationId;
-      return service.jobs.start({ projectId: args.projectId, workflowId: args.workflowId, kind: args.kind, input: { args: parsed } });
+      return shown(service.jobs.start({ projectId: args.projectId, workflowId: args.workflowId, kind: args.kind, input: { args: parsed } }));
     }, { destructive: true, openWorld: true });
   add('job.list', listOptions, true, 'List native turns, commands and capability jobs, without their output. job.read returns one job with all of it.', (args, context) => {
     const page = service.list('job', args, context);
     // A list is for finding a job; each may hold a quarter megabyte of output.
-    return { ...page, items: page.items.map(item => { const { output, ...job } = item; return { ...job, outputChars: output?.length || 0, ...(output ? { outputTail: output.slice(-400) } : {}) }; }) };
+    return { ...page, items: page.items.map(item => { const { output, ...job } = shown(item); return { ...job, outputChars: output?.length || 0, ...(output ? { outputTail: output.slice(-400) } : {}) }; }) };
   });
-  add('job.read', { id }, true, 'Read one job including output and outcome evidence.', args => service.store.get('job', args.id));
+  // A job is followed to its end by waiting for it, not by asking again and again. Whoever waits is woken by what
+  // happens to that job (one listener for all of them), and looks for itself whether it has ended.
+  const ended = job => !['queued', 'running', 'cancelling'].includes(job.status), waiting = new Map();
+  service.store.on('event', event => { for (const wake of [...(waiting.get(event.entityId) || [])]) wake(); });
+  add('job.read', { id, waitMs }, true, 'Read one job including output and outcome evidence. waitMs waits until the job has ended. Output is recorded when a job ends; while a command job runs, process_read {id: its processId} reads what it has printed so far.',
+    async (args, context) => {
+      const signal = service.waitSignal(context);
+      if (!ended(service.store.get('job', args.id)) && args.waitMs > 0 && !signal.aborted) await new Promise(resolve => {
+        const waiters = waiting.get(args.id) || waiting.set(args.id, new Set()).get(args.id);
+        const done = () => { clearTimeout(timer); waiters.delete(wake); if (!waiters.size && waiting.get(args.id) === waiters) waiting.delete(args.id); signal.removeEventListener('abort', done); resolve(); };
+        const wake = () => { if (ended(service.store.get('job', args.id))) done(); };
+        const timer = setTimeout(done, args.waitMs);
+        waiters.add(wake);
+        signal.addEventListener('abort', done, { once: true });
+      });
+      return shown(service.store.get('job', args.id));
+    });
   add('job.cancel', { id, ...mutation }, false, 'Cancel an owned job and inspect its confirmed outcome.', args => {
     const job = service.store.get('job', args.id);
-    if (job.kind !== 'agent-turn') return service.jobs.cancel(args.id);
+    if (job.kind !== 'agent-turn') return Promise.resolve(service.jobs.cancel(args.id)).then(shown);
     if (job.status !== 'running') throw new DomainError('job_not_running', 'Job is not running.');
     return service.agents.cancel(job.agentId);
   });
@@ -71,7 +87,7 @@ export function defineCommandOperations(service, add) {
     const job = service.store.get('job', args.id);
     if (job.kind !== 'agent-turn') {
       service.project(job.projectId, { write: job.kind === 'command' });
-      return service.jobs.retry(args.id);
+      return shown(service.jobs.retry(args.id));
     }
     if (!['failed', 'unknown', 'cancelled'].includes(job.status)) throw new DomainError('job_not_retryable', 'Only failed, unknown or cancelled jobs can be explicitly retried.');
     const delivery = service.store.get('delivery', job.deliveryId);

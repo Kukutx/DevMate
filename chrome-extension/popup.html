@@ -5,8 +5,8 @@
 <title>DevMate</title>
 <style>
   :root { color-scheme: light dark; --line: color-mix(in srgb, currentColor 16%, transparent); --soft: color-mix(in srgb, currentColor 7%, transparent);
-    --accent: #1f6feb; --good: #1a7f37; --warn: #9a6700; --bad: #cf222e; }
-  @media (prefers-color-scheme: dark) { :root { --accent: #4c8dff; --good: #3fb950; --warn: #d29922; --bad: #ff7b72; } }
+    --accent: #18181b; --on: #fafafa; --good: #15803d; --warn: #92400e; --bad: #b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --accent: #fafafa; --on: #18181b; --good: #4ade80; --warn: #fbbf24; --bad: #f87171; } }
   * { box-sizing: border-box; }
   body { font: 13px/1.45 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; margin: 0; padding: 14px; width: 340px; }
   header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
@@ -30,22 +30,25 @@
   code { font: 12px ui-monospace, Consolas, monospace; background: var(--soft); padding: 1px 5px; border-radius: 4px; user-select: all; }
 
   /* A debugger on a tab is the owner's to see and to take off, here as on the bar the browser shows. */
-  #debugging { display: flex; align-items: center; gap: 8px; border: 1px solid var(--warn); border-radius: 8px; padding: 7px 10px; margin-bottom: 10px; font-size: 12px; }
-  #debugging span { flex: 1; }
-  #debugging button { flex: none; padding: 4px 8px; }
+  #debugging, #link { display: flex; align-items: center; gap: 8px; border: 1px solid var(--warn); border-radius: 8px; padding: 7px 10px; margin-bottom: 10px; font-size: 12px; }
+  #debugging span, #link span { flex: 1; }
+  #debugging button, #link button { flex: none; padding: 4px 8px; }
+  /* Where several browsers are connected: which one DevMate uses, and the owner's way to make it this one. */
+  #link { border-color: var(--line); }
 
   .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
   .actions .wide { grid-column: 1 / -1; }
   button.action { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
-  button.action:hover:not(:disabled) { border-color: var(--accent); }
+  button.action:hover:not(:disabled) { background: var(--soft); }
   button.action:disabled { opacity: .4; cursor: default; }
-  button.action.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.action.primary { background: var(--accent); border-color: var(--accent); color: var(--on); font-weight: 600; }
+  button.action.primary:hover:not(:disabled) { background: var(--accent); opacity: .88; }
   [hidden] { display: none !important; }
 
   section { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
   section h2 { font-size: 12px; font-weight: 600; opacity: .6; margin: 0 0 6px; text-transform: none; }
   .switch { display: flex; gap: 10px; align-items: flex-start; padding: 4px 0; cursor: pointer; }
-  .switch input { margin-top: 3px; flex: none; }
+  .switch input { margin-top: 3px; flex: none; accent-color: var(--accent); }
   .switch b { display: block; font-weight: 600; }
   .switch span { display: block; opacity: .75; font-size: 12px; }
 
@@ -75,6 +78,11 @@
   <div id="debugging" hidden>
     <span id="debuggingText"></span>
     <button id="debugStop" class="action" type="button"></button>
+  </div>
+
+  <div id="link" hidden>
+    <span id="linkText"></span>
+    <button id="prefer" class="action" type="button" hidden></button>
   </div>
 
   <div class="actions">

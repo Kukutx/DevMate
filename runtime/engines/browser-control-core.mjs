@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { isLoopbackHostname } from '../platform/http-host-policy.mjs';
 import { sensitiveWorkspacePathReason } from '../platform/sensitive-path-policy.mjs';
+import { startable } from '../platform/tools.mjs';
 
 export const MAX_SESSIONS = 4;
 export const MAX_TABS_PER_SESSION = 16;
@@ -241,7 +242,7 @@ export function browserControlStatus(state, workspaceRoot, settings = {}) {
   catch (cause) { error = cause.message; }
   const executablePath = String(settings.chromiumExecutablePath || '').trim();
   const executableAllowed = browserExecutableAllowed(executablePath);
-  const executableExists = !executablePath || !!fs.statSync(executablePath, { throwIfNoEntry: false })?.isFile();
+  const executableExists = !executablePath || startable(executablePath);
   return {
     available: !!modulePath && executableAllowed && executableExists,
     modulePath,

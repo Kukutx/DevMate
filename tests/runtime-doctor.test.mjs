@@ -97,12 +97,294 @@ test('the doctor names what works, what is missing and the exact next step', asy
   exposed.service.connection = { status: () => ({ kind: 'cloudflare', phase: 'connected' }) };
   const healthy = await exposed.service.call('runtime.doctor', {}, owner);
   assert.equal(find(healthy, 'connection.credential').status, 'ok'); assert.equal(find(healthy, 'connection.public').status, 'ok');
-  assert.equal(healthy.status, 'warn', 'a verified but unauthenticated public URL is still a warning');
+  // A relay whose address is not reached while ssh runs: the line about the process is in order, and the remedy of a
+  // line in order is not shown anywhere. So what OpenSSH said last stands in the line that needs it, not in a pointer
+  // to one that shows nothing.
+  const relayed = await service(t, { connection: { kind: 'ssh', publicUrl: 'https://devmate.example.com/mcp/' + 'k'.repeat(32), executable: process.execPath, host: '203.0.113.7', user: 'deploy', relay: true } },
+    { verifier: async () => ({ verified: false, reachable: false, reason: 'no answer' }) });
+  relayed.service.connection = { status: () => ({ kind: 'ssh', phase: 'connected', diagnostic: 'debug1: Connecting to 203.0.113.7\r\nWarning: remote port forwarding failed for listen port 18443\n' }) };
+  const stuck = await relayed.service.call('runtime.doctor', {}, owner);
+  assert.equal(find(stuck, 'connection.process').status, 'ok');
+  // (An entry is one line, also where what a program said had several: nothing in it begins a line of its own.)
+  assert.deepEqual([find(stuck, 'connection.public').status, find(stuck, 'connection.public').fix], ['fail', 'devmate restart opens the forward to the relay again. What OpenSSH said last: debug1: Connecting to 203.0.113.7 Warning: remote port forwarding failed for listen port 18443']);
+  relayed.service.connection = { status: () => ({ kind: 'ssh', phase: 'connected' }) }; relayed.service.verification = null;
+  assert.equal(find(await relayed.service.call('runtime.doctor', {}, owner), 'connection.public').fix, 'devmate restart opens the forward to the relay again.');
+  // A verified but unauthenticated public URL is still a warning, and nothing else about it fails. (What this computer
+  // has installed is not looked at here: a Mac without ripgrep fails the line rg, and that says nothing of the route.)
+  const tools = new Set(['rg', 'git']), settled = { ...healthy, checks: healthy.checks.filter(item => !tools.has(item.id)) };
+  assert.deepEqual(settled.checks.filter(item => item.status === 'fail').map(item => item.id), []);
+  assert.equal(find(healthy, 'security').status, 'warn');
+  if (healthy.checks.every(item => !tools.has(item.id) || item.status === 'ok')) assert.equal(healthy.status, 'warn');
   // The CLI prints the same report and fails the command only when something is broken.
   const lines = [];
   const code = await cli(['doctor'], { stdout: { write: text => lines.push(text) }, stderr: { write() {} }, clientFactory: () => ({ call: async () => report }) });
   assert.equal(code, 1); assert.match(lines.join(''), /\[FAIL\] connection\.credential: CLOUDFLARE_TUNNEL_TOKEN is missing\n\s+-> Store it with: devmate secret set CLOUDFLARE_TUNNEL_TOKEN/);
-  assert.equal(await cli(['doctor'], { stdout: { write() {} }, stderr: { write() {} }, clientFactory: () => ({ call: async () => healthy }) }), 0);
+  assert.equal(await cli(['doctor'], { stdout: { write() {} }, stderr: { write() {} }, clientFactory: () => ({ call: async () => ({ ...settled, status: 'warn' }) }) }), 0);
+});
+
+// Where projects are named for a model there is room for a few of them only: the instructions stay under what clients
+// read, and a project is named with its whole folder. How many fit depends on how long the folders are, and a
+// temporary folder is long on some systems (macOS: /private/var/folders/…/T/…, eighty characters before the project's
+// own name). The tests that look at what is said of one project read the surface that leaves the most room, so that
+// two projects fit wherever the tests run; what happens to a project there is no room for has a test of its own.
+const WITH_ROOM = 'gpt';
+
+test('where projects are named for a model, one there is no room for is counted and not named, also when its folder is gone: the list of projects says it', async t => {
+  const { service: runtime, temp } = await service(t, {});
+  const { serverInstructions } = await import('../runtime/mcp.mjs');
+  const made = [];
+  for (let index = 0; index < 8; index++) { const root = path.join(temp, 'a-folder-with-a-name-of-some-length-' + index); fs.mkdirSync(root); made.push(await runtime.call('project.create', { root, name: 'project ' + index }, owner)); }
+  fs.rmSync(made.at(-1).root, { recursive: true });
+  assert.equal((await runtime.call('project.list', {}, { id: 'owner' })).items.find(item => item.id === made.at(-1).id).missing, true);
+  for (const surface of ['generic', 'gpt', 'claude']) {
+    const text = serverInstructions(runtime, surface), listed = made.filter(project => text.includes(' ' + project.id + ' = ')).length;
+    // (The tool that lists them all is named as the surface names it.)
+    assert.ok(listed >= 1 && Number(/ and (\d+) more \(\w+\)\./.exec(text)?.[1]) === made.length - listed, surface + ': ' + text);
+    assert.equal(text.includes(made.at(-1).id), false, surface); assert.equal(text.includes('folder not there'), false, surface);
+  }
+});
+
+test('a shared folder that was moved or deleted is said to be that: by the call that needs it, by the doctor and where projects are named', async t => {
+  const { service: runtime, temp } = await service(t, {});
+  const { serverInstructions } = await import('../runtime/mcp.mjs');
+  const named = () => serverInstructions(runtime, WITH_ROOM);
+  const connected = { id: 'owner' }, kept = path.join(temp, 'kept'), moved = path.join(temp, 'moved');
+  for (const folder of [kept, moved]) { fs.mkdirSync(folder); fs.writeFileSync(path.join(folder, 'a.txt'), 'a'); }
+  await runtime.call('project.create', { root: kept, name: 'kept' }, owner);
+  const project = await runtime.call('project.create', { root: moved, name: 'moved' }, owner);
+  const find = async id => (await runtime.call('runtime.doctor', {}, owner)).checks.find(item => item.id === id);
+  const flow = await runtime.call('workflow.create', { projectId: project.id, title: 'Before it moved' }, owner);
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, write\\);'));
+  assert.equal(await find('projects.missing'), undefined);
+  fs.renameSync(moved, path.join(temp, 'elsewhere'));
+  // What is said of a folder where projects are named for a model is what was seen last: that is on every request,
+  // and the file system is not asked there. Fifty of them look at nothing.
+  const look = fs.promises.lstat;
+  let looks = 0;
+  fs.promises.lstat = (...args) => { looks++; return look(...args); };
+  try { for (let request = 0; request < 50; request++) assert.match(named(), new RegExp(project.id + ' = moved \\(.*, write\\);')); } finally { fs.promises.lstat = look; }
+  assert.equal(looks, 0);
+  // Where the projects are listed the folders are looked at for the answer, so the list is true when it is given,
+  // and what is said elsewhere is true from then on: no call has to have met the missing folder first.
+  const listed = async () => Object.fromEntries((await runtime.call('project.list', {}, connected)).items.map(item => [item.name, item.missing]));
+  assert.deepEqual(await listed(), { kept: undefined, moved: true });
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
+  // Each call that needs the folder says what happened to it and what is done about it, instead of a bare ENOENT.
+  // What is done differs: a drive is connected again and nothing is lost; taking the project off the list takes what
+  // is kept for it as well, and is said to, in full.
+  const takingOff = 'Taking a project off the list also removes what DevMate keeps for it: its workflows, tasks, agents and their messages, approvals and questions, jobs with their output, references and artifacts, ' +
+    'and the copies agents worked in that were not applied (of such a copy the repository, wherever it is now, keeps its note of the worktree and the branch devmate/copy-…: there, "git worktree prune" and then "git branch -D devmate/copy-…" remove them). ' +
+    'An editor then no longer shares the folder at the old place by itself.';
+  const said = 'The folder of this project is not there: ' + project.root + '. If it is on a disk or a share that is not connected right now, connect it and call again; nothing has to be removed for that. ' +
+    'If it was moved, renamed or deleted, its owner takes the project off the list (devmate project remove ' + project.id + ') ' +
+    'and shares the folder where it is now (devmate project add <folder>). ' + takingOff;
+  for (const [operation, input] of [['workspace.read', { path: 'a.txt' }], ['workspace.files', {}], ['workspace.write', { path: 'b.txt', text: 'b' }], ['git.status', {}], ['project.overview', {}], ['shell.run', { file: process.execPath, args: ['-v'] }],
+    // A coding agent and an engine start their programs in that folder: refused the same way, before anything is made
+    // for the task (started all the same, the program fails for want of a folder, which reads as if it were not installed).
+    ['agents.delegate', { provider: 'codex', prompt: 'x', waitMs: 0 }], ['agents.delegate', { provider: 'codex', prompt: 'x', isolate: true, waitMs: 0 }],
+    ['agents.start', { workflowId: flow.id, provider: 'codex' }], ['agents.start', { workflowId: flow.id, provider: 'codex', prompt: 'x' }], ['capability.list', { engine: 'godot' }]])
+    await assert.rejects(runtime.call(operation, { projectId: project.id, ...input }, connected), { code: 'project_missing', message: said }, operation);
+  assert.deepEqual([runtime.store.count('workflow', { projectId: project.id }), runtime.store.count('agent', { projectId: project.id }), runtime.store.count('approval', { projectId: project.id })], [1, 0, 0], 'nothing was made for the agent, and the owner is not asked about a task that cannot start');
+  assert.equal((await runtime.call('workspace.read', { projectId: 'kept', path: 'a.txt' }, connected)).text, 'a', 'the other project works as before');
+  // A job for an engine in that project is one that never started, and says so: nothing is left to be looked into.
+  const job = await runtime.call('job.start', { projectId: project.id, kind: 'capability', input: { capability: 'godot.diagnose', input: {} } }, owner);
+  let ended = job;
+  for (let round = 0; round < 200 && ['queued', 'running'].includes(ended.status); round++) { await new Promise(resolve => setTimeout(resolve, 25)); ended = await runtime.call('job.read', { id: job.id }, owner); }
+  assert.deepEqual([ended.status, ended.outcome, ended.error?.code], ['failed', 'not_started', 'project_missing']);
+  assert.deepEqual(await listed(), { kept: undefined, moved: true });
+  // Where a call has to say which project it means, the one that is gone is marked.
+  await assert.rejects(runtime.call('workspace.write', { path: 'b.txt', text: 'b' }, connected), error => error.code === 'project_required' && error.message.includes(' = kept;') && error.message.endsWith(project.id + ' = moved (its folder is not there)'));
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
+  assert.match(named(), / = kept \(.*, write\);/);
+  const missing = await find('projects.missing');
+  assert.equal(missing.status, 'warn');
+  assert.equal(missing.detail, 'The folder of 1 project(s) is not there: "moved" at ' + project.root);
+  assert.equal(missing.fix, 'Where the folder is on a drive or a share that is not connected right now, connect it: nothing has to be removed. Where it was moved, renamed or deleted, take the project off the list ' +
+    '(devmate project remove <id, name or folder>) and share the folder where it is now (devmate project add <folder>). ' + takingOff);
+  // At the computer the command line lists it marked as well.
+  const printed = [];
+  assert.equal(await cli(['project', 'list'], { stdout: { write: text => printed.push(text) }, stderr: { write() {} }, clientFactory: () => ({ call: (name, input) => runtime.call(name, input, owner) }) }), 0);
+  assert.deepEqual(JSON.parse(printed.join('')).map(item => [item.name, item.missing]), [['kept', undefined], ['moved', true]]);
+  // A call for the project that goes through without its folder (it reads what DevMate keeps) does not take the mark
+  // off: the folder is looked at, and it is still not there.
+  await runtime.call('workspace.history', { projectId: project.id }, connected);
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
+  // Put back where it was (a drive that is connected again), the project works with everything it had, and the first
+  // call for it that goes through takes the mark off at once, wherever it is said: a model that has just read a file
+  // there is not told that the folder is not there.
+  const elsewhere = path.join(temp, 'elsewhere');
+  fs.renameSync(elsewhere, moved);
+  assert.equal((await runtime.call('workspace.read', { projectId: project.id, path: 'a.txt' }, connected)).text, 'a');
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, write\\);'));
+  assert.deepEqual(await listed(), { kept: undefined, moved: undefined });
+  assert.equal(await find('projects.missing'), undefined);
+  // Gone again and back again with no call in between that used it: the list alone takes the mark, and takes it off.
+  fs.renameSync(moved, elsewhere);
+  assert.deepEqual(await listed(), { kept: undefined, moved: true });
+  fs.renameSync(elsewhere, moved);
+  assert.deepEqual(await listed(), { kept: undefined, moved: undefined });
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, write\\);'));
+  // The doctor answers from the same look: what it says and what the list says are never two things.
+  fs.renameSync(moved, elsewhere);
+  assert.equal((await find('projects.missing')).detail, 'The folder of 1 project(s) is not there: "moved" at ' + project.root);
+  assert.match(named(), new RegExp(project.id + ' = moved \\(.*, folder not there\\);'));
+  // It is taken off the list although its folder is gone, and nothing is said of it afterwards.
+  assert.equal((await runtime.call('project.remove', { id: project.id }, owner)).removed, true);
+  assert.equal(await find('projects.missing'), undefined);
+});
+
+test('a runtime that starts while a shared folder is gone says so from its first answer; a folder that does not answer is named and not waited for twice; a drive that is not connected is said to be that', async t => {
+  const owned = temporary(t, 'devmate-doctor-'), temp = owned.directory, instanceRoot = path.join(temp, 'instance');
+  const { serverInstructions } = await import('../runtime/mcp.mjs');
+  const named = () => serverInstructions(runtime, WITH_ROOM);
+  let runtime = new DevMateService({ instanceRoot, endpoint: '', config: {} });
+  owned.close = () => runtime.close();
+  await runtime.ready;
+  const folders = Object.fromEntries(['kept', 'away', 'slow'].map(name => { const folder = path.join(temp, name); fs.mkdirSync(folder); return [name, folder]; }));
+  const projects = {};
+  for (const [name, root] of Object.entries(folders)) projects[name] = await runtime.call('project.create', { root, name }, owner);
+  await runtime.close();
+  // The folder went while nothing ran (a drive that is connected later, a folder that was moved meanwhile).
+  fs.renameSync(folders.away, path.join(temp, 'elsewhere'));
+  runtime = new DevMateService({ instanceRoot, endpoint: '', config: {} });
+  await runtime.ready;
+  // The first thing a client is told names the projects, and a session keeps it: it is true from the start.
+  assert.match(named(), new RegExp(projects.away.id + ' = away \\(.*, folder not there\\);'));
+  assert.match(named(), new RegExp(projects.kept.id + ' = kept \\(.*, write\\);'));
+  const listed = async () => Object.fromEntries((await runtime.call('project.list', {}, { id: 'owner' })).items.map(item => [item.name, item.missing]));
+  assert.deepEqual(await listed(), { kept: undefined, away: true, slow: undefined });
+
+  // A folder on a share that does not answer: whoever lists the projects waits for it up to a bound, once, and is
+  // given it as it was last seen; the doctor names it instead of waiting for the system to give up.
+  const look = fs.promises.lstat;
+  // (The bound is a second here, and what must not happen again is a wait of that length: a computer that is busy
+  // with other tests has room on both sides.)
+  runtime.folderWaitMs = 1000;
+  fs.promises.lstat = target => target === projects.slow.root ? new Promise(() => {}) : look(target);
+  try {
+    let began = Date.now();
+    assert.deepEqual(await listed(), { kept: undefined, away: true, slow: undefined });
+    assert.ok(Date.now() - began >= 900 && Date.now() - began < 10000, 'waited for the bound: ' + (Date.now() - began) + ' ms');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    began = Date.now();
+    assert.deepEqual(await listed(), { kept: undefined, away: true, slow: undefined });
+    assert.ok(Date.now() - began < 600, 'a look that has not answered for longer than the bound is not waited for again: ' + (Date.now() - began) + ' ms');
+    const checks = (await runtime.call('runtime.doctor', {}, owner)).checks, unanswered = checks.find(item => item.id === 'projects.unanswered');
+    assert.deepEqual([unanswered.status, unanswered.detail], ['warn', 'The folder of 1 project(s) has not answered when it was looked for: "slow" at ' + projects.slow.root]);
+    // Nothing is to be removed for it: a project that is taken off the list does not come back with the share.
+    assert.equal(unanswered.fix, 'That is a share or a drive that hangs. Connect it again, or wait for it: nothing has to be removed. Until it answers, calls for such a project wait for it as long as the system does.');
+    assert.equal(checks.find(item => item.id === 'projects.missing').detail, 'The folder of 1 project(s) is not there: "away" at ' + projects.away.root);
+  } finally { fs.promises.lstat = look; }
+
+  // A drive letter that is not there at all (Windows): connecting it is the whole remedy, and removing is not offered.
+  if (process.platform === 'win32') {
+    const letter = [...'ZYXWVUTSRQ'].find(one => !fs.existsSync(one + ':\\'));
+    if (letter) {
+      const root = letter + ':\\devmate-not-connected\\project';
+      runtime.store.update('project', projects.kept.id, { root });
+      await assert.rejects(runtime.call('workspace.read', { projectId: projects.kept.id, path: 'a.txt' }, { id: 'owner' }), error => error.code === 'project_missing' && error.details?.driveMissing === true &&
+        error.message === 'The folder of this project is on a drive that is not connected: ' + root + '. Connect the drive and call again; nothing has to be removed for that.');
+    }
+  }
+});
+
+test('what the command line writes for the owner to read holds no character a terminal acts on, whoever chose the words', async t => {
+  const { service: runtime, temp } = await service(t, {});
+  const connected = { id: 'owner' }, code = number => String.fromCharCode(number);
+  const esc = code(0x1b), bel = code(7), csi = code(0x9b), del = code(0x7f), turned = code(0x202e), back = code(13);
+  const folder = path.join(temp, 'gone'); fs.mkdirSync(folder);
+  const project = await runtime.call('project.create', { root: folder, name: 'plain' }, owner);
+  // A client may name a project, in the guarded profile too. This name moves the cursor up, wipes the line, writes
+  // one of its own, makes a link the terminal's way, and begins another line: all of it where the doctor names the
+  // project because its folder is gone.
+  const name = 'x' + esc + '[1A' + esc + '[2K[ ok ] security: nothing to do ' + esc + ']8;;https://example.com' + bel + 'here' + esc + ']8;;' + bel + csi + '2K' + del + turned + back + '\n[ ok ] forged: line';
+  await runtime.call('project.update', { id: project.id, name }, connected);
+  fs.rmSync(folder, { recursive: true });
+  // (A name too short to be taken out of a report as a name, with a line end in it.)
+  const short = path.join(temp, 'short'); fs.mkdirSync(short);
+  await runtime.call('project.create', { root: short, name: 'p\nq' }, owner);
+  fs.rmSync(short, { recursive: true });
+  // And it asks for an operation by a name that is kept among the recent failures, for the report.
+  await assert.rejects(runtime.call('operations.call', { operation: 'no' + esc + '[2Ksuch\n[ ok ] forged: line', input: {} }, connected), { code: 'unknown_operation' });
+  fs.appendFileSync(path.join(temp, 'instance', 'runtime.log'), 'a line a program wrote ' + esc + '[31mred' + esc + '[0m\n');
+  const run = async args => { const written = []; const exit = await cli([...args, '--instance', path.join(temp, 'instance')], { stdout: { write: text => written.push(text) }, stderr: { write: text => written.push(text) },
+    clientFactory: () => ({ call: (operation, input) => runtime.call(operation, input, owner) }) }); return { exit, text: written.join('') }; };
+  const none = (text, what) => { for (const [one, called] of [[esc, 'ESC'], [bel, 'BEL'], [csi, 'CSI'], [del, 'DEL'], [turned, 'a character that turns the line'], [back, 'a carriage return']]) assert.equal(text.includes(one), false, what + ' holds ' + called); };
+  const doctor = await run(['doctor']);
+  none(doctor.text, 'the doctor');
+  // The doctor gives a name as a name: in quotes it cannot close, on one line, without those characters, cut short.
+  const given = 'x[1A[2K[ ok ] security: nothing to do ]8;;https://example.comhere]8;;2K [ ok ] forged: line'.slice(0, 60);
+  assert.ok(doctor.text.includes('[warn] projects.missing: The folder of 2 project(s) is not there: "' + given + '" at '), doctor.text);
+  assert.ok(doctor.text.includes('; "p q" at '), 'an entry stays on its one line');
+  assert.equal(doctor.text.split('\n').some(line => line.startsWith('[ ok ] forged')), false, 'no line of the report is one the name wrote');
+  // The answer itself is made that way, so every place that shows it has it: an editor's output and a side panel too.
+  const checked = (await runtime.call('runtime.doctor', {}, owner)).checks;
+  for (const item of checked) assert.equal(/[\r\n]/.test(item.detail + (item.fix || '')), false, item.id);
+  const report = await run(['doctor', '--report']);
+  none(report.text, 'the report');
+  assert.ok(report.text.includes('Unknown DevMate operation: no\\u001b[2Ksuch [ ok ] forged: line'));
+  assert.equal(report.text.split('\n').some(line => line.startsWith('[ ok ] forged')), false);
+  assert.ok(report.text.includes('; "p q" at ') && !report.text.split('\n').some(line => line.startsWith('q" at ')), 'an entry of the report stays on its one line');
+  // A report is made to be shared: the name of a project is taken out of it, also as the doctor says it. (What a name
+  // may hold and still leave the report its own words is a test of its own below.)
+  assert.ok(/\[warn\] projects\.missing: The folder of 2 project\(s\) is not there: "<folder-\d>" at <folder-\d>; "p q" at <folder-\d>\n/.test(report.text), report.text);
+  // What is printed as JSON says the same characters by their numbers, and reads back as the name it is.
+  const listed = await run(['project', 'list']);
+  none(listed.text, 'the list');
+  assert.equal(JSON.parse(listed.text)[0].name, name);
+  const logs = await run(['logs']);
+  none(logs.text, 'the log');
+  assert.ok(logs.text.includes('a line a program wrote \\u001b[31mred\\u001b[0m'));
+});
+
+test('the doctor says which of several browsers is used, names the others as names, and says when the one in use is paused', async t => {
+  const { service: runtime } = await service(t, {});
+  const chrome = async () => (await runtime.call('runtime.doctor', {}, owner)).checks.find(item => item.id === 'chrome');
+  const methods = ['tabs.list'];
+  const first = runtime.browser.attach({ browser: 'Google Chrome', extension: '4.0.6', methods }).linkId, hosts = [first];
+  await runtime.browser.next({ linkId: first, waitMs: 1000 });
+  // Every browser keeps asking for work, as its host does: a doctor that takes its time on a busy computer (seen on
+  // Windows, five seconds for these looks) is no reason for a browser to be taken for gone halfway.
+  const asking = setInterval(() => { for (const linkId of hosts) runtime.browser.next({ linkId, waitMs: 1000 }).catch(() => {}); }, 300);
+  t.after(() => clearInterval(asking));
+  // One browser: as it was.
+  assert.deepEqual([(await chrome()).status, (await chrome()).detail], ['ok', 'The DevMate extension 4.0.6 in Google Chrome is connected: its bookmarks, tabs, history, downloads and the page in front are available to your client (capability_list {engine:"chrome"}).']);
+  // A second one, whose extension says of itself what it likes: named in quotes, on the one line, cut short.
+  const second = runtime.browser.attach({ browser: 'Edge"\n[ ok ] forged: line ' + 'x'.repeat(60), extension: '4.0.6', methods }).linkId;
+  await runtime.browser.next({ linkId: second, waitMs: 1000 });
+  hosts.push(second);
+  runtime.browser.prefer({ linkId: first });
+  let check = await chrome();
+  const other = '"' + ('Edge\' [ ok ] forged: line ' + 'x'.repeat(60)).slice(0, 40) + '"';
+  assert.equal(check.status, 'ok');
+  assert.ok(check.detail.endsWith(' 2 browsers are connected and this is the one that is used; also connected: ' + other + '. To use another, open the DevMate panel in it and choose "Use this browser".'), check.detail);
+  assert.equal(/[\r\n]/.test(check.detail), false);
+  // The one in use is paused by its owner, and so is the other: said as a warning, with what ends it.
+  runtime.browser.state({ linkId: second, paused: true });
+  assert.ok((await chrome()).detail.includes('also connected: ' + other + ' (paused).'));
+  runtime.browser.state({ linkId: first, paused: true });
+  check = await chrome();
+  assert.equal(check.status, 'warn');
+  assert.match(check.detail, /^The DevMate extension 4\.0\.6 in Google Chrome is connected, and paused there: every request is refused until you let DevMate use that browser again in the extension's panel\./);
+});
+
+test('the doctor says when the shell is there and runs nothing', async t => {
+  const { service: runtime } = await service(t, {});
+  const find = async id => (await runtime.call('runtime.doctor', {}, owner)).checks.find(item => item.id === id);
+  // Asked only where a command is a script the shell is started with, and said only when it fails.
+  if (runtime.processes.shell.kind !== 'powershell') assert.equal(await find('shell.run'), undefined);
+  runtime.processes.shell.kind = 'powershell';
+  let asked = 0;
+  runtime.processes.tryShell = async () => { asked++; return { ok: true }; };
+  assert.equal(await find('shell.run'), undefined); assert.equal(asked, 1);
+  runtime.processes.tryShell = async () => ({ ok: false, reason: 'File C:\\x.ps1 cannot be loaded because running scripts is disabled on this system. + FullyQualifiedErrorId : UnauthorizedAccess' });
+  const refused = await find('shell.run');
+  assert.equal(refused.status, 'fail');
+  assert.match(refused.detail, / did not run a one-line command: File C:\\x\.ps1 cannot be loaded because running scripts is disabled/);
+  assert.match(refused.fix, /^A policy on this computer forbids PowerShell to run scripts .*Get-ExecutionPolicy -List/);
+  runtime.processes.tryShell = async () => ({ ok: false, reason: 'it did not end within 10 seconds' });
+  assert.match((await find('shell.run')).fix, /^No command runs through DevMate until the shell does\./);
+  assert.equal((await runtime.call('runtime.doctor', {}, owner)).status, 'fail');
 });
 
 test('the report for a bug says what happened and not who or where: no credentials, paths, account names or addresses', async t => {
@@ -152,6 +434,115 @@ test('the report for a bug says what happened and not who or where: no credentia
   // The folders an instance shares are read from its state, so that a log line does not give their names away.
   assert.match(offline.join(''), /the runtime is not running/); assert.match(offline.join(''), /could not reach \S+ from <folder-1>/);
   assert.ok(!offline.join('').includes(temp) && !offline.join('').includes('A Private Folder Name'), 'neither the instance directory nor a shared folder is spelled out');
+});
+
+test('a report keeps its own words and gives nothing away, whatever a project is called', async t => {
+  const { anonymize } = await import('../runtime/report.mjs');
+  // What gives somebody away is taken out before a name is: a name may be a part of it, and may not keep the rest.
+  assert.equal(anonymize('from bob@acme.com', { names: [['acme', '<folder-1>']] }), 'from <email>');
+  // A name finds nothing in what was put in: not in what a rule put in, and not in what stands for another name.
+  assert.equal(anonymize('mail of maria@example.com for Acme Shop, folder and address', { names: [['Acme Shop', '<folder-1>'], ['folder', '<folder-2>'], ['email', '<folder-3>'], ['address', '<folder-4>']] }),
+    'mail of <email> for <folder-1>, <folder-2> and <folder-4>');
+  // A name is a word where it begins or ends with a letter, and stands anywhere where it does not.
+  assert.equal(anonymize('AcmeCorp, Acme-Corp, x[beta]y and a/shop/b', { names: [['Acme', '<folder-1>'], ['[beta]', '<folder-2>'], ['/shop', '<folder-3>']] }), 'AcmeCorp, <folder-1>-Corp, x<folder-2>y and a<folder-3>/b');
+  assert.equal(anonymize('five     blanks', { names: [['     ', '<folder-1>']] }), 'five     blanks');
+  // A public host is a word somebody chose as well, and goes after the addresses for the same reason: before them,
+  // the account on the owner's own server was left standing before the @ (what OpenSSH says of a relay it cannot reach).
+  assert.equal(anonymize('ssh: deploy@relay.example.com: Permission denied (publickey). Asked Relay.Example.com:22', { hosts: ['relay.example.com'] }), 'ssh: <email>: Permission denied (publickey). Asked <public-host>:22');
+  // A host that is an address with a port, or one a quick tunnel was given, does not stand there either way.
+  assert.equal(anonymize('at 203.0.113.9:8443 and calm-river.trycloudflare.com', { hosts: ['203.0.113.9:8443', 'calm-river.trycloudflare.com'] }), 'at <address>:8443 and <assigned>.trycloudflare.com');
+  // Nor does a host find anything in what was put in, for an address or for another host; and of two hosts the longer
+  // goes first, so that one is not left as a part of the other.
+  assert.equal(anonymize('carol@example.org, mail, host and relay.host', { hosts: ['mail', 'host', 'relay', 'relay.host'] }), '<email>, <public-host>, <public-host> and <public-host>');
+  // The address a quick tunnel was given is put in whole, the part that every such address has with it.
+  assert.equal(anonymize('at calm-river.trycloudflare.com for trycloudflare', { names: [['trycloudflare', '<folder-1>']] }), 'at <assigned>.trycloudflare.com for <folder-1>');
+  // What stands for a credential is put in as well, and no name is found in it.
+  assert.equal(anonymize('Authorization: Bearer abcdefghijklmnop for redacted', { names: [['redacted', '<folder-1>']] }), 'Authorization: Bearer [redacted] for <folder-1>');
+
+  const { service: runtime, temp } = await service(t, { connection: { kind: 'cloudflare', publicUrl: 'https://devmate.example.com/mcp', executable: process.execPath } });
+  const connected = { id: 'owner' }, key = 'abcdefghijklmnopqrstuvwxyz012345', special = 'a.b*c(d)[e]+?';
+  const make = async folder => { const root = path.join(temp, folder); fs.mkdirSync(root); const project = await runtime.call('project.create', { root, name: 'zz' }, owner); fs.rmSync(root, { recursive: true }); return project; };
+  const first = await make('one'), second = await make('two');
+  fs.writeFileSync(path.join(temp, 'instance', 'runtime.log'), '2026-10-12T10:00:00.000Z connection: mail from bob@acme.com and carol@gmail.com at 203.0.113.9, https://devmate.example.com/mcp and https://calm-river.trycloudflare.com/mcp/' + key + ' in ' + first.root +
+    '\n2026-10-12T10:00:01.000Z agent: axbcde and ' + special + ' are two\n');
+  const HEADINGS = ['DevMate report. Credentials, private paths, account names and addresses were taken out as far as they can be recognised: read it before you share it.', 'Checks',
+    'Operations since the start: name, calls (through MCP), failed, ms for half of the calls, for 19 in 20, slowest', 'Recent failures, newest first', 'Runtime log, last lines'];
+  const ENTRY = /^\[( ok |info|warn|FAIL)\] [a-z][\w.-]*: /;
+  // The report's own words: its first lines (about the computer and the settings), its headings, and the mark and the
+  // id of every entry, with the arrow of what is to be done about it.
+  const own = text => { const lines = text.split('\n'); return [...lines.slice(0, 5).map(line => line.replace(/ · up \d+ min$/, '')), ...lines.slice(5).map(line => HEADINGS.includes(line) ? line : ENTRY.exec(line)?.[0] ?? (line.startsWith('       -> ') ? '->' : null)).filter(Boolean)]; };
+  // And all the rest: what an entry says, a failure after the operation it was a failure of, a line of the log.
+  const content = text => text.split('\n').slice(5).filter(line => !HEADINGS.includes(line)).map(line => line.replace(ENTRY, '').replace(/^#\d+ \S+ \S+ /, '')).join('\n');
+  const report = async (name, other = 'zz') => {
+    await runtime.call('project.update', { id: first.id, name }, connected);
+    await runtime.call('project.update', { id: second.id, name: other }, connected);
+    await runtime.call('operations.call', { operation: name, input: {} }, connected).catch(() => {});
+    return (await runtime.call('runtime.report', {}, owner)).text;
+  };
+  const plain = await report('zz'), words = own(plain), logged = text => { const lines = text.split('\n'); return lines.slice(lines.indexOf('Runtime log, last lines') + 1); };
+  const [, where] = /in (<folder-\d>)$/m.exec(plain);
+  assert.deepEqual(logged(plain), ['2026-10-12T10:00:00.000Z connection: mail from <email> and <email> at <address>, https://<public-host>/mcp and https://<assigned>.trycloudflare.com/mcp/<key> in ' + where,
+    '2026-10-12T10:00:01.000Z agent: axbcde and ' + special + ' are two']);
+  assert.ok(words.includes('Checks') && words.includes('[ ok ] node: ') && words.includes('[warn] projects.missing: ') && words.includes('->'), words.join('\n'));
+
+  const long = name => name.trim().length > 3, said = name => name.replace(/\s+/g, ' '), shown = name => '"' + (long(name) ? said(name).replace(said(name).trim(), '<f>') : said(name)) + '" at <f>';
+  const account = os.userInfo().username, segment = path.basename(path.dirname(os.homedir()));
+  for (const [name, other = 'zz'] of [['[FAIL]'], ['\n[FAIL]'], ['[FAIL] connection.public'], ['ok ] node'], ['FAIL] connection.public'], ['(none)\n\nRuntime log'], ['Checks'], [' Checks\n'], ['DevMate'], ['ok'], ['a'],
+    ['Acme', 'Acme Shop'], ['folder', 'Acme Shop'], [special], [account], [segment], ['acme'], ['gmail'], ['/mcp'], ['     '], ['my-app']].filter(([name]) => name)) {
+    const text = await report(name, other), what = JSON.stringify(name), lines = text.split('\n');
+    assert.deepEqual(own(text), words, what + ': the report\'s own words are as they were');
+    for (const kept of ['bob', 'carol', 'acme.com', 'gmail.com', '203.0.113.9', key, 'calm-river', 'devmate.example.com', temp, path.basename(os.homedir()) + path.sep]) assert.ok(!text.includes(kept), what + ': ' + kept + ' is in the report: ' + text);
+    assert.equal(/<folder-\d+>-\d/.test(text), false, what + ': a name was found in what stands for another: ' + text);
+    assert.deepEqual(logged(text), logged(plain).map(line => name === '/mcp' ? line.replaceAll('/mcp', where) : name === special ? line.replace(special, where) : line), what);
+    const missing = lines.find(line => line.startsWith('[warn] projects.missing: ')).split('is not there: ')[1].replace(/<folder-\d>/g, '<f>').split('; ').sort();
+    assert.deepEqual(missing, [shown(name), shown(other)].sort(), what);
+    if (!long(name)) continue;
+    // The name itself is nowhere in what the report says: the folder it is the name of stands there.
+    // (As a word, where it begins or ends as one: "folders" is not the project "folder".)
+    const stands = (one, text) => new RegExp((/\w/.test(one[0]) ? '(?<!\\w)' : '') + one.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + (/\w/.test(one.at(-1)) ? '(?!\\w)' : '')).test(text);
+    for (const one of [name, other].filter(long)) assert.ok(!stands(said(one).trim(), content(text).replace(/<folder-\d>/g, '')), what + ': ' + JSON.stringify(one) + ' is in the report: ' + content(text));
+    assert.ok(lines.some(line => /^#\d+ \S+ \S+ \w+ \(connected, \d+ ms\): Unknown .* operation: +<folder-\d> ?$/.test(line)), what + ': the failure says which folder, not what it is called: ' + text);
+  }
+
+  // A public address that names a port: its host is taken out as it is written with the port and without it.
+  const { service: ported, temp: other } = await service(t, { connection: { kind: 'cloudflare', publicUrl: 'https://devmate.example.com:8443/mcp', executable: process.execPath } });
+  fs.writeFileSync(path.join(other, 'instance', 'runtime.log'), 'connection: getaddrinfo ENOTFOUND devmate.example.com, asked for https://devmate.example.com:8443/mcp\n');
+  const both = (await ported.call('runtime.report', {}, owner)).text;
+  assert.ok(both.endsWith('\nconnection: getaddrinfo ENOTFOUND <public-host>, asked for https://<public-host>/mcp') && !both.includes('devmate.example'), both);
+});
+
+test('what a report cuts short it has cleaned first: half of an address, a path or a name is not recognised as what it was', async t => {
+  const { service: runtime, temp } = await service(t, {});
+  const log = path.join(temp, 'instance', 'runtime.log'), report = async () => (await runtime.call('runtime.report', {}, owner)).text;
+  // A line of the log is shown by its first 600 characters. The mail address in this one begins before them and ends after.
+  fs.writeFileSync(log, 'x'.repeat(590) + ' dora@private.example and more\n');
+  let text = await report();
+  assert.ok(text.includes('x'.repeat(590) + ' <email>') && !text.includes('dora@'), text);
+  // The log is read from its last 24000 bytes on. Where that begins inside a line, the line is the end of one: here
+  // the end of a path, without the part that says it is somebody's home. It is not shown; the lines after it are.
+  const end = 'me/zoe-private-account/work\n', filler = 'y'.repeat(479) + '\n', last = 'z'.repeat(24000 - end.length - 49 * filler.length - 1) + '\n';
+  fs.writeFileSync(log, 'a line from long ago at /ho' + end + filler.repeat(49) + last);
+  assert.equal(fs.statSync(log).size - 24000, 'a line from long ago at /ho'.length);
+  text = await report();
+  assert.ok(!text.includes('zoe-private-account') && text.includes('\n' + 'y'.repeat(479) + '\n') && text.endsWith('\n' + last.trim()), text);
+  // A log that is shorter than that is shown from its first line.
+  fs.writeFileSync(log, 'the first line\nthe second\n');
+  assert.ok((await report()).endsWith('Runtime log, last lines\nthe first line\nthe second'));
+  // The message of a failure is shown by its first 300 characters. This one lists the projects by their names, and
+  // the second name begins before the 300th character and ends after it.
+  const named = 'Client Secret Product '.repeat(9).trim();
+  const made = [];
+  for (const [folder, name] of [['one', 'filler '.repeat(21).trim()], ['two', named]]) { const root = path.join(temp, folder); fs.mkdirSync(root); made.push(await runtime.call('project.create', { root, name }, owner)); }
+  await assert.rejects(runtime.call('workspace.read', { path: 'a.txt' }, { id: 'owner' }), error => error.code === 'project_required' && error.message.indexOf(named) < 300 && error.message.indexOf(named) + named.length > 300);
+  text = await report();
+  const failure = text.split('\n').find(line => / workspace\.read project_required \(connected, \d+ ms\): /.test(line));
+  assert.ok(/ = <folder-1>; \S+ = <folder-2>$/.test(failure) && !text.includes('Client Sec'), text);
+  // What runtime.metrics gives of the same failure is its first 300 characters, as before.
+  const told = (await runtime.call('runtime.metrics', {}, owner)).usage.recentFailures[0].message;
+  assert.equal(told.length, 300); assert.ok(told.startsWith('Several projects are available'));
+  // And a message that is long when it has been cleaned is shown by its first 300 characters in the report as well.
+  await assert.rejects(runtime.call('workspace.read', { projectId: made[0].id, path: 'q'.repeat(400) + '.txt' }, { id: 'owner' }), error => error.message.includes('q'.repeat(400)));
+  assert.equal((await report()).split('\n').find(line => line.includes('qqqq')).split(' ms): ')[1].length, 300);
 });
 
 test('the VS Code connection wizard stores the token privately, saves a signed-in Cloudflare route and offers the URL and sign-in code', async () => {

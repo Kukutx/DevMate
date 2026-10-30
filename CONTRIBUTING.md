@@ -16,7 +16,7 @@ Do not include credentials, real environment files, private endpoints, keys, dat
 - Preserve the documented identity and execution boundaries in `SECURITY.md`.
 - Keep CLI, plugin, MCP and workbench actions connected to the same service operation and state.
 - Update public usage and verification documentation when a protocol, configuration, host entrypoint or build procedure changes.
-- The version is stated in several files (runtime, package, lock file, `plugin.json`, Obsidian `manifest.json` and `versions.json`). Change it with `npm run version:set -- X.Y.Z`; `npm run check` fails when they disagree.
+- The version is stated in several files (runtime, package, lock file, `plugin.json`, Obsidian `manifest.json` and `versions.json`, and the browser extension's `chrome-extension/manifest.json`). Change it with `npm run version:set -- X.Y.Z`; `npm run check` fails when they disagree.
 
 ## Build and test
 
@@ -41,10 +41,11 @@ A provider account, a public tunnel, a connection from ChatGPT or Claude, an opt
 
 A release is one tag on `main`; the rest is automatic.
 
-1. `npm run version:set -- X.Y.Z` states the version everywhere.
-2. Add a `## X.Y.Z` section to `CHANGELOG.md`. It becomes the release notes.
-3. `npm run release:preflight` runs what the release workflow will run.
-4. Merge to `main`, then push the tag `X.Y.Z`. No `v`: Obsidian finds the release of a community plugin by the bare version.
+1. The owner approves the number: the line `- Owner-approved version: X.Y.Z.` in `AGENTS.md` says which. `npm run check` refuses any other version, so that line and the files of step 2 change in one commit.
+2. `npm run version:set -- X.Y.Z` states the version everywhere else. (Setting the number back the same way takes it all back: the changelog section and `versions.json` too. The script cannot tell a version that was released from one that was only set: it is for taking back a number that was set and not released. Setting a lower number after a release would rename that release's section and drop its entry, and going on from a number that was never released to a higher one leaves that number's section and entry behind. Use Git for those two.)
+3. `CHANGELOG.md` collects what changes under `## Unreleased`; step 2 makes that section `## X.Y.Z`. Read it once more: it becomes the release notes. (Without an Unreleased section, add `## X.Y.Z` yourself.) A release with entries still under Unreleased is refused.
+4. `npm run release:preflight` runs what the release workflow will run.
+5. Merge to `main`, then push the tag `X.Y.Z`. No `v`: Obsidian finds the release of a community plugin by the bare version.
 
 The **DevMate 4 Release** workflow verifies the tagged commit again, builds one candidate and publishes that same build:
 

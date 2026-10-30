@@ -6,7 +6,7 @@ import { ACTIONS, HOST, PROTOCOL, createBridge } from '../chrome-extension/bridg
 function fakePort() {
   const posted = [], listeners = { message: [], disconnect: [] };
   return { posted,
-    port: { postMessage: message => posted.push(message), onMessage: { addListener: listener => listeners.message.push(listener) }, onDisconnect: { addListener: listener => listeners.disconnect.push(listener) } },
+    port: { postMessage: message => posted.push(message), disconnect: () => { posted.push({ type: 'disconnected by the extension' }); }, onMessage: { addListener: listener => listeners.message.push(listener) }, onDisconnect: { addListener: listener => listeners.disconnect.push(listener) } },
     say: async message => { for (const listener of listeners.message) listener(message); await new Promise(resolve => setImmediate(resolve)); },
     drop: reason => { for (const listener of listeners.disconnect) listener(reason); } };
 }
@@ -71,11 +71,11 @@ test('a call from the runtime is run and answered under its id; an unknown metho
   assert.equal(refused.error.code, 'not_supported');
 });
 
-test('as an entry it asks for five things and nothing else', async () => {
+test('as an entry it asks for six things and nothing else', async () => {
   const { bridge, ports } = harness();
   bridge.open();
   await ports[0].say({ type: 'ready', protocol: 1, runtime: { running: true } });
-  assert.deepEqual([...ACTIONS], ['status', 'start', 'workbench', 'mcpUrl', 'pending']);
+  assert.deepEqual([...ACTIONS], ['status', 'start', 'workbench', 'mcpUrl', 'pending', 'prefer']);
   await assert.rejects(bridge.request('stop'), error => error.code === 'invalid_input');
   await assert.rejects(bridge.request('operations.call'), error => error.code === 'invalid_input');
   assert.equal(ports[0].posted.some(message => message.action === 'stop'), false);
@@ -151,6 +151,32 @@ test('a host that ends for another reason is a lost connection, not a missing re
   assert.equal(bridge.state().said, 'Native host has exited.');
 });
 
+test('a host that says why it will not serve this browser is shown in its own words, and asked again every half minute', async () => {
+  // A browser that was opened by a command a connected client started carries that command's mark, and the host
+  // does not serve it. The browser itself would only say that the host has ended.
+  const { bridge, ports, timers } = harness();
+  bridge.open();
+  const why = 'DevMate does not serve this browser: it was opened by a command of a connected client. Close the browser completely and open it yourself.';
+  await ports[0].say({ type: 'refused', message: why });
+  assert.equal(bridge.state().host, 'connecting', 'the words alone end nothing');
+  ports[0].drop('Native host has exited.');
+  assert.equal(bridge.state().host, 'closed');
+  assert.equal(bridge.state().said, why);
+  assert.equal(timers.findLast(timer => !timer.cancelled).ms, 30000, 'what it named does not change by trying fast');
+  // The words are for that one connection: the next one that ends says what the browser says of it.
+  timers.findLast(timer => !timer.cancelled).run();
+  ports[1].drop('Native host has exited.');
+  assert.equal(bridge.state().said, 'Native host has exited.');
+  // Words that are no text, or far too many, are not shown as they come.
+  timers.findLast(timer => !timer.cancelled).run();
+  await ports[2].say({ type: 'refused', message: 'x'.repeat(5000) });
+  ports[2].drop('');
+  assert.equal(bridge.state().said.length, 600);
+  timers.findLast(timer => !timer.cancelled).run();
+  await ports[3].say({ type: 'refused' });
+  ports[3].drop('');
+  assert.equal(bridge.state().said, 'The connection to DevMate was closed.');
+});
 test('every call is noted without what it carried: what, when, whether it worked', async () => {
   const { bridge, ports } = harness({ methods: { 'tabs.list': async () => ({ items: [] }), 'tabs.close': async () => { throw Object.assign(new Error('No tab.'), { code: 'not_found' }); } } });
   bridge.open();
@@ -176,4 +202,109 @@ test('paused, nothing is run: the runtime is told so, and the refusal is noted',
   await bridge.pause(false);
   await ports[0].say({ type: 'call', id: 'p2', method: 'bookmarks.remove', params: { id: '5' } });
   assert.deepEqual(ran, [1]);
+});
+
+test('the host is told whether the owner has paused this browser: once it is known, when it changes, and again on a new connection', async () => {
+  const { bridge, ports, timers } = harness({ paused: true });
+  const states = port => port.posted.filter(message => message.type === 'state');
+  bridge.open();
+  assert.equal('paused' in ports[0].posted[0], false, 'before what the browser keeps was read, the greeting says nothing of it');
+  await ports[0].say({ type: 'ready', protocol: 1, runtime: { running: true } });
+  assert.deepEqual(states(ports[0]), [{ type: 'state', paused: true }]);
+  await bridge.pause(true);
+  assert.equal(states(ports[0]).length, 1, 'what the host already knows is not said twice');
+  await bridge.pause(false);
+  assert.deepEqual(states(ports[0]).at(-1), { type: 'state', paused: false });
+  await bridge.pause(true);
+  ports[0].drop('Native host has exited.');
+  timers.findLast(timer => !timer.cancelled).run();
+  assert.equal(ports[1].posted[0].paused, true, 'a later greeting carries it');
+  await ports[1].say({ type: 'ready', protocol: 1, runtime: { running: true } });
+  assert.deepEqual(states(ports[1]), [], 'and it is not said a second time after it');
+  // Paused while no host is there: nothing is sent into the void, and the next connection hears it.
+  ports[1].drop('');
+  await bridge.pause(false);
+  timers.findLast(timer => !timer.cancelled).run();
+  assert.equal(ports[2].posted[0].paused, false);
+});
+
+test('where several browsers are connected the panel knows which one DevMate uses, and the owner can make it this one', async () => {
+  const { bridge, ports } = harness();
+  bridge.open();
+  await ports[0].say({ type: 'ready', protocol: 1, runtime: { running: true } });
+  assert.equal(bridge.state().link, null, 'a host that says nothing of it leaves it unknown');
+  await ports[0].say({ type: 'event', name: 'link.status', data: { current: false, browsers: 2 } });
+  assert.deepEqual(bridge.state().link, { current: false, browsers: 2 });
+  const chosen = bridge.prefer();
+  const asked = ports[0].posted.findLast(message => message.type === 'request');
+  assert.equal(asked.action, 'prefer');
+  await ports[0].say({ type: 'response', id: asked.id, ok: true, result: { current: true, browsers: 2 } });
+  assert.deepEqual(await chosen, { current: true, browsers: 2 });
+  assert.deepEqual(bridge.state().link, { current: true, browsers: 2 });
+  // What a host says that is no such answer is not taken as it comes.
+  await ports[0].say({ type: 'event', name: 'link.status', data: { current: 'yes', browsers: '3.7x' } });
+  assert.deepEqual(bridge.state().link, { current: false, browsers: 0 });
+  // A host that refuses (an older DevMate does not know the request) leaves things as they were.
+  await ports[0].say({ type: 'event', name: 'link.status', data: { current: false, browsers: 2 } });
+  const refused = assert.rejects(bridge.prefer(), error => error.code === 'invalid_input');
+  await ports[0].say({ type: 'response', id: ports[0].posted.findLast(message => message.type === 'request').id, ok: false, error: { code: 'invalid_input', message: 'DevMate does not do prefer for the extension.' } });
+  await refused;
+  assert.deepEqual(bridge.state().link, { current: false, browsers: 2 });
+  // It is of that connection and of a runtime that runs.
+  await ports[0].say({ type: 'event', name: 'runtime.status', data: { running: false } });
+  assert.equal(bridge.state().link, null);
+  await ports[0].say({ type: 'event', name: 'link.status', data: { current: true, browsers: 2 } });
+  ports[0].drop('');
+  assert.equal(bridge.state().link, null);
+});
+
+test('a start "with the browser" that does not work is not swallowed: what DevMate said is kept for the panel', async () => {
+  const { bridge, ports } = harness({ startWithBrowser: true });
+  bridge.open();
+  await ports[0].say({ type: 'ready', protocol: 1, runtime: { running: false } });
+  const asked = ports[0].posted.find(message => message.type === 'request');
+  await ports[0].say({ type: 'response', id: asked.id, ok: false, error: { code: 'failed', message: 'Port 8788 is in use by another program.' + 'x'.repeat(900) } });
+  assert.equal(bridge.state().startSaid.startsWith('Port 8788 is in use by another program.'), true);
+  assert.equal(bridge.state().startSaid.length, 600);
+  // It goes once DevMate runs, however it came to.
+  await ports[0].say({ type: 'event', name: 'runtime.status', data: { running: true } });
+  assert.equal(bridge.state().startSaid, null);
+});
+
+test('a host that is there and answers nothing is let go and another is started; one that answers, even with a refusal, is kept', async () => {
+  const { bridge, ports, timers } = harness();
+  bridge.open();
+  await bridge.look();
+  assert.equal(ports[0].posted.filter(message => message.type === 'request').length, 0, 'before the host has answered once, nothing is asked');
+  await ports[0].say({ type: 'ready', protocol: 1, runtime: { running: true, version: '4.0.6', port: 8788 } });
+  const asked = () => ports[0].posted.filter(message => message.action === 'status');
+  // It answers: the state is what it said, and the connection stays.
+  let looked = bridge.look();
+  await ports[0].say({ type: 'response', id: asked().at(-1).id, ok: true, result: { running: true, version: '4.0.6', port: 9000 } });
+  await looked;
+  assert.equal(bridge.connected(), true);
+  assert.equal(bridge.state().runtime.port, 9000);
+  // It answers with an error: an answer all the same.
+  looked = bridge.look();
+  await ports[0].say({ type: 'response', id: asked().at(-1).id, ok: false, error: { code: 'failed', message: 'The runtime does not answer.' } });
+  await looked;
+  assert.equal(bridge.connected(), true);
+  assert.equal(ports.length, 1);
+  // Two looks at once ask once.
+  const first = bridge.look(), second = bridge.look();
+  assert.equal(asked().length, 3);
+  // It gives no answer at all: the connection is ended from here and tried again.
+  timers.findLast(timer => !timer.cancelled && timer.ms === 30000).run();
+  await Promise.all([first, second]);
+  assert.equal(bridge.connected(), false);
+  assert.equal(bridge.state().host, 'closed');
+  assert.equal(bridge.state().said, 'DevMate\'s host for this browser did not answer.');
+  assert.equal(ports[0].posted.at(-1).type, 'disconnected by the extension');
+  const again = timers.findLast(timer => !timer.cancelled);
+  assert.ok(again.ms <= 2000, 'it is tried again soon: ' + again.ms);
+  again.run();
+  assert.equal(ports.length, 2);
+  // What the old connection says afterwards is not listened to.
+  await ports[0].say({ type: 'event', name: 'runtime.status', data: { running: false } });
+  assert.equal(bridge.state().host, 'connecting');
 });

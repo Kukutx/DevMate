@@ -18,6 +18,26 @@ const ACCESS_LABEL = { write: 'read and write', read: 'read only' };
 const pathKey = value => process.platform === 'win32' ? value.toLowerCase() : value;
 const samePath = (a, b) => pathKey(a) === pathKey(b);
 
+// Every notification and every input box of this extension is shown through here. VS Code makes a link of
+// "[label](address)" in the text of a notification, and a link that names a command runs it when it is clicked (its
+// own code says so, and it was tried in 1.101). The text carries words that are not DevMate's: the first line of a
+// task a client handed over, what an agent asks, the name of a folder or an agent, what a program or a server said.
+// So no text that is shown can form such a link: a bracket that closes is never followed directly by one that
+// opens. Everything else of a notification's text is shown as the characters it is.
+// An input box reads what it asks, and what it says of an input, the same way (seen in the code of 1.101 and 1.133):
+// both go through here as well, whatever they are made of today. A test holds every file of this folder to these
+// functions (tests/repository-check.test.mjs).
+function notifier(vscode) {
+  const inert = text => typeof text === 'string' ? text.replace(/\]\(/g, '] (') : text;
+  const notify = {};
+  for (const name of ['showInformationMessage', 'showWarningMessage', 'showErrorMessage'])
+    Object.defineProperty(notify, name, { get: () => typeof vscode.window[name] === 'function' ? (message, ...rest) => vscode.window[name](inert(message), ...rest) : undefined });
+  const said = answer => typeof answer === 'string' ? inert(answer) : answer && typeof answer === 'object' ? { ...answer, message: inert(answer.message) } : answer;
+  notify.showInputBox = (options = {}) => vscode.window.showInputBox({ ...options, ...(options.prompt === undefined ? {} : { prompt: inert(options.prompt) }),
+    ...(typeof options.validateInput === 'function' ? { validateInput: async value => said(await options.validateInput(value)) } : {}) });
+  return notify;
+}
+
 function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactory = createHostClient, clock = Date.now } = {}) {
   // This identity lives only inside one VS Code extension host (one editor
   // window). It never becomes a machine-wide "active workspace". Any number of
@@ -26,7 +46,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   const windowId = randomUUID();
   let client, active = false, subscription, poll, refreshTimer, changes, output, statusBar, mcpChanged, memory;
   let refreshPromise, rerun = false, attachment = null, rememberedRoot = null, boundKey = '', boundGeneration = '', seenAt = 0;
-  let state = { state: 'stopped', running: false }, contextTimer, publishedContext = '', asking = false, updateOffered = false, servedMcp = '', pendingConnection = '';
+  let state = { state: 'stopped', running: false }, contextTimer, publishedContext = '', asking = false, updateOffered = false, servedMcp = '', pendingConnection = '', busy = false;
   const declined = new Set(), recoveries = [], announced = new Set();
   let route = null, routeFailingSince = 0, announcedRoute = '', shared = null;
 
@@ -38,6 +58,10 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     })) : [] };
   }
   const settings = () => vscode.workspace.getConfiguration('devMate');
+  // The local port where the owner set one (for the user, the workspace or the folder), else undefined.
+  // (The setting has no number of its own: VS Code's Settings page drops a value equal to a default, so a default of
+  // 8788 would make 8788 typed there no word at all. Empty, or null, is no port named.)
+  const chosenPort = () => { const seen = settings().inspect?.('runtimePort'), set = [seen?.workspaceFolderValue, seen?.workspaceValue, seen?.globalValue].find(value => value !== undefined && value !== null); return set === undefined ? undefined : Number(set); };
   function treeItem(label, command, description = '', args) {
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
     item.description = description;
@@ -56,7 +80,9 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     // A relay that does not list this computer's own address still serves the clients in the cloud: nothing to show.
     return !checked || checked.verified || checked.pending === 'not-listed' ? '' : checked.pending ? 'waiting for the new address to be known' : ROUTE_BROKEN;
   };
-  const connectionNote = () => state.health?.connection === 'failed' ? 'connection failed' : state.outdated ? 'older version running, restart to update'
+  // (Its own folder gone under it comes first: until it is started again, agents and the browser fail for no reason
+  // that anything else would show.)
+  const connectionNote = () => state.health?.filesGone ? 'its files were removed by an update, restart it' : state.health?.connection === 'failed' ? 'connection failed' : state.outdated ? 'older version running, restart to update'
     : pendingConnection && pendingConnection === state.record?.generation ? 'restart to apply the saved connection' : routeNote();
   const provider = {
     getTreeItem: item => item,
@@ -76,11 +102,12 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   };
   let shownRunning;
   function report(error) { output?.appendLine(error?.message || String(error)); }
+  const notify = notifier(vscode);
   async function showError(error) {
     report(error);
     const action = error?.code === 'NODE_REQUIRED' ? 'Open Settings' : error?.code === 'RUNTIME_STOPPED' ? 'Start DevMate'
       : /Port \d+ on 127\.0\.0\.1 is already used/.test(error?.message || '') ? 'Choose Another Port' : null;
-    const picked = await vscode.window.showErrorMessage(error?.message || String(error), ...(action ? [action] : []));
+    const picked = await notify.showErrorMessage(error?.message || String(error), ...(action ? [action] : []));
     if (picked === 'Open Settings') await vscode.commands.executeCommand?.('workbench.action.openSettings', 'devMate.nodeCommandPath');
     if (picked === 'Choose Another Port') await vscode.commands.executeCommand?.('workbench.action.openSettings', 'devMate.runtimePort');
     if (picked === 'Start DevMate') await vscode.commands.executeCommand?.('devMate.runtime.start');
@@ -88,8 +115,9 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   function render() {
     if (statusBar) {
       const note = connectionNote();
-      statusBar.text = (state.running ? (ROUTE_WAITING.includes(note) ? '$(sync~spin)' : note ? '$(warning)' : '$(plug)') : '$(circle-slash)') + ' DevMate';
-      statusBar.tooltip = 'DevMate runtime: ' + state.state + (note ? ' (' + note + ')' : '') +
+      statusBar.text = (busy ? '$(sync~spin)' : state.running ? (ROUTE_WAITING.includes(note) ? '$(sync~spin)' : note ? '$(warning)' : '$(plug)') : state.crashed ? '$(warning)' : '$(circle-slash)') + ' DevMate';
+      // (Said as what happened: a runtime that ended by itself is not one somebody stopped.)
+      statusBar.tooltip = 'DevMate runtime: ' + (busy ? 'busy, it does not answer at the moment' : state.crashed ? 'stopped unexpectedly' : state.state) + (note ? ' (' + note + ')' : '') +
         (state.running && !note && route?.verification?.verified ? '\nReachable from the cloud: the public address was checked end to end' : '') +
         (state.running ? '\nPort ' + state.record?.port + (attachment?.selectedProjectId ? ''
           : attachment?.roots.some(folder => folder.projectId) ? '\nSeveral folders are shared: choose the one this window works in (DevMate: Select This Window Workspace)' : '\nThis window shares no folder') +
@@ -162,9 +190,12 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     if (!attachment?.roots.some(folder => folder.projectId && folder.projectId === data?.projectId)) return;
     if (!['approval.created', 'input.created'].includes(data?.type) || entity?.status !== 'pending' || announced.has(entity.id)) return;
     announced.add(entity.id);
-    void Promise.resolve(vscode.window.showInformationMessage?.(
-      (data.type === 'approval.created' ? 'An agent is waiting for your approval' : 'An agent is asking you a question') +
-        (typeof entity.summary === 'string' ? ': ' + entity.summary.slice(0, 200) : '.'), 'Open Workbench'))
+    // A task that a connected client handed to an agent has not begun: it is the task that waits, not an agent. Its
+    // summary is the runtime's own sentence with every name in quotes that it closes: it is shown whole (it is short
+    // by how it is made), where a cut could leave a name open.
+    void Promise.resolve(notify.showInformationMessage?.(
+      (data.type !== 'approval.created' ? 'An agent is asking you a question' : entity.kind === 'delegation' ? 'A connected client asks to run a task on your account' : 'An agent is waiting for your approval') +
+        (typeof entity.summary === 'string' ? ': ' + entity.summary.slice(0, entity.kind === 'delegation' ? 600 : 200) : '.'), 'Open Workbench'))
       .then(picked => picked === 'Open Workbench' ? vscode.commands.executeCommand?.('devMate.runtime.open') : undefined).catch(report);
   }
   function renewSubscription() {
@@ -261,7 +292,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     render();
   }
   async function settleSharing() {
-    if (!active || !attachment || typeof vscode.window.showInformationMessage !== 'function') return;
+    if (!active || !attachment || typeof notify.showInformationMessage !== 'function') return;
     if (sharingMode() === 'ask') return askSharing();
     // Sharing by default is never silent: each shared folder is named once, with the way to change it.
     const told = recalled(NOTIFIED_KEY);
@@ -270,7 +301,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
       const first = told.size === 0;
       told.add(pathKey(spelled(folder)));
       await memory?.update(NOTIFIED_KEY, [...told]);
-      void Promise.resolve(vscode.window.showInformationMessage('DevMate shares "' + folder.name + '" with connected AI clients (' + (ACCESS_LABEL[folder.access] || 'shared') + ').' +
+      void Promise.resolve(notify.showInformationMessage('DevMate shares "' + folder.name + '" with connected AI clients (' + (ACCESS_LABEL[folder.access] || 'shared') + ').' +
         (first ? ' DevMate keeps running after you close this window, until you stop it (DevMate: Stop DevMate Runtime).' : ''), 'Change…'))
         .then(picked => picked === 'Change…' ? changeSharing(spelled(folder)) : undefined).catch(report);
     }
@@ -282,7 +313,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     asking = true;
     try {
       for (const folder of pending) {
-        const answer = await vscode.window.showInformationMessage(
+        const answer = await notify.showInformationMessage(
           'Let AI clients connected to DevMate work in "' + folder.name + '"? They can then read its files' +
           ', and with write access change them and run commands.', 'Read and write', 'Read only', 'Don\'t share');
         if (!active) return;
@@ -295,8 +326,8 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   // The owner's later word on one folder of this window: read and write, read only, or not shared.
   async function changeSharing(root) {
     if (!attachment) {
-      if (state.running) await vscode.window.showInformationMessage?.('DevMate could not read the folders of this window. The "DevMate Runtime" output channel has the reason.');
-      else if (await vscode.window.showInformationMessage?.('DevMate is not running.', 'Start DevMate') === 'Start DevMate') await vscode.commands.executeCommand?.('devMate.runtime.start');
+      if (state.running) await notify.showInformationMessage?.('DevMate could not read the folders of this window. The "DevMate Runtime" output channel has the reason.');
+      else if (await notify.showInformationMessage?.('DevMate is not running.', 'Start DevMate') === 'Start DevMate') await vscode.commands.executeCommand?.('devMate.runtime.start');
       return;
     }
     // Decide on what is true now, not on what this window last saw.
@@ -304,7 +335,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     if (Array.isArray(live?.roots)) attachment = live;
     let folder = root ? attachment.roots.find(item => samePath(spelled(item), root) || samePath(item.root, root)) : null;
     if (!folder) {
-      if (!attachment.roots.length) { await vscode.window.showInformationMessage?.('This window has no local folder open.'); return; }
+      if (!attachment.roots.length) { await notify.showInformationMessage?.('This window has no local folder open.'); return; }
       folder = attachment.roots.length === 1 ? attachment.roots[0] : (await vscode.window.showQuickPick(attachment.roots.map(item => (
         { label: item.name, description: item.projectId ? 'Shared, ' + (ACCESS_LABEL[item.access] || 'shared') : 'Not shared', folder: item })), { placeHolder: 'Which folder of this window?' }))?.folder;
       if (!folder) return;
@@ -318,7 +349,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     { placeHolder: 'What may connected AI clients do in "' + folder.name + '"?' });
     if (!choice || choice.access === current) return;
     if (choice.access === 'none') {
-      const confirmed = await vscode.window.showWarningMessage('Stop sharing "' + folder.name + '" with AI clients?',
+      const confirmed = await notify.showWarningMessage('Stop sharing "' + folder.name + '" with AI clients?',
         { modal: true, detail: 'Its files are not touched. DevMate\'s own records for this folder (tasks, agent sessions and the history of changes made through DevMate) are removed.' }, 'Stop sharing');
       if (confirmed !== 'Stop sharing') return;
       // A decision about sharing is the owner's, whichever project this window currently works on.
@@ -339,7 +370,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     { placeHolder: 'What may an AI client connected as you decide?' });
     if (!choice || choice.profile === current) return current;
     if (choice.profile === 'full') {
-      const confirmed = await vscode.window.showWarningMessage('Give connected AI clients full access?',
+      const confirmed = await notify.showWarningMessage('Give connected AI clients full access?',
         { modal: true, detail: 'A client connected as you can then share any folder of this computer, read credential files such as .env, set up capability engines and answer what a delegated agent asks. ' +
           'What a delegated agent asks permission for is granted automatically. Keep your MCP address private, or require sign-in. You can switch back at any time.' }, 'Switch on full access');
       if (confirmed !== 'Switch on full access') return current;
@@ -361,9 +392,9 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     state = await client.status();
   }
   async function offerUpdate() {
-    if (!state.outdated || updateOffered || typeof vscode.window.showInformationMessage !== 'function') return;
+    if (!state.outdated || updateOffered || typeof notify.showInformationMessage !== 'function') return;
     updateOffered = true;
-    const picked = await vscode.window.showInformationMessage('The running DevMate runtime is version ' + (state.record?.version || 'unknown') +
+    const picked = await notify.showInformationMessage('The running DevMate runtime is version ' + (state.record?.version || 'unknown') +
       '; this extension ships ' + state.host?.version + '. Restart the shared runtime to use the new version? Other windows and connected clients reconnect.', 'Restart');
     if (picked === 'Restart') await restart().catch(showError);
   }
@@ -372,7 +403,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   // What is remembered is a fingerprint, never the address: the address of a quick tunnel ends in its key.
   async function announceRoute() {
     const checked = route?.verification, address = route?.publicUrl || route?.url;
-    if (!address || !checked || checked.pending || typeof vscode.window.showInformationMessage !== 'function') { routeFailingSince = 0; return; }
+    if (!address || !checked || checked.pending || typeof notify.showInformationMessage !== 'function') { routeFailingSince = 0; return; }
     if (checked.verified) routeFailingSince = 0;
     else {
       // A route is also checked while its connector is still starting: one failed check is not news yet.
@@ -386,11 +417,14 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     announcedRoute = mark;
     await shared?.update(ROUTE_KEY, mark);
     if (!checked.verified) {
-      const picked = await vscode.window.showWarningMessage('DevMate: ' + ROUTE_BROKEN + (checked.reason ? ' (' + String(checked.reason).slice(0, 200) + ')' : '') + '. Cloud clients such as ChatGPT cannot connect.', 'Run Doctor');
+      const picked = await notify.showWarningMessage('DevMate: ' + ROUTE_BROKEN + (checked.reason ? ' (' + String(checked.reason).slice(0, 200) + ')' : '') +
+        // Where the check got no answer at all, that is what is known, and a client in the cloud comes another way.
+        // Where it was answered (by another runtime, or with a refusal) the address is not this computer's for anyone.
+        (checked.reachable ? '. Run the doctor for what to do.' : ', asked from this computer itself. A client in the cloud such as ChatGPT may still get through: try it there, or run the doctor.'), 'Run Doctor');
       if (picked === 'Run Doctor') await doctor();
     } else if (!before.startsWith(id + ':')) {
       // The same address working again is shown in the status bar and needs nothing from the person.
-      const picked = await vscode.window.showInformationMessage(route.temporaryAddress
+      const picked = await notify.showInformationMessage(route.temporaryAddress
         ? 'DevMate can be reached from the cloud at a new address. Give it to your client (ChatGPT, Claude): a quick tunnel gets a new address at every start.'
         : 'DevMate can be reached from the cloud: its public address was checked end to end.', 'Copy Address');
       if (picked === 'Copy Address') await copyMcpUrl();
@@ -400,6 +434,12 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     if (!active) return state;
     const observed = await client.status();
     if (!active) return observed;
+    // A runtime that holds its instance and did not answer within a moment is busy, not gone (a long step, a computer
+    // under load). The window stays as it is until it answers again or its process is gone: taken for stopped, the
+    // window let go of its folders and the editor's own tools lost the endpoint, for the length of one look.
+    // (One that answers that it is stopping, or is still starting, is not busy: it says what it does.)
+    busy = !observed.running && observed.processAlive === true && observed.state === 'unavailable' && state.running === true;
+    if (busy) { render(); return state; }
     state = observed;
     if (!state.running) await recover().catch(report);
     route = state.running ? await client.call('connection.status', {}, { scoped: false }).catch(() => null) : null;
@@ -453,7 +493,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     if (!invoke) {
       output.appendLine(JSON.stringify(selected.operation,null,2));output.show();return;
     }
-    const raw = await vscode.window.showInputBox({title:selected.label,prompt:'JSON object input',value:'{}'});
+    const raw = await notify.showInputBox({title:selected.label,prompt:'JSON object input',value:'{}'});
     if (raw === undefined) return;
     let input;
     try { input = JSON.parse(raw); } catch { throw new Error('The input is not valid JSON.'); }
@@ -476,12 +516,12 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const connection = await client.call('connection.status', {});
     // A quick tunnel without an address has nothing a client in the cloud could use, and the local address is not it.
     if (connection.kind === 'cloudflare-quick' && !connection.publicUrl) {
-      await vscode.window.showInformationMessage('The quick tunnel has not been given its address yet. Try again in a few seconds; "DevMate: Doctor" shows what the tunnel says.');
+      await notify.showInformationMessage('The quick tunnel has not been given its address yet. Try again in a few seconds; "DevMate: Doctor" shows what the tunnel says.');
       return;
     }
     const value = connection.publicUrl || connection.url || connection.tunnelId || await client.mcpUrl();
     await vscode.env.clipboard.writeText(value);
-    await vscode.window.showInformationMessage(connection.tunnelId ? 'Copied the tunnel ID. In ChatGPT choose the Tunnel connection type.'
+    await notify.showInformationMessage(connection.tunnelId ? 'Copied the tunnel ID. In ChatGPT choose the Tunnel connection type.'
       : connection.publicUrl || connection.url ? 'Copied the public MCP URL.' + (connection.temporaryAddress ? ' It ends in the key of this start: give it to your own client only.' : '') +
           (connection.remoteMcpVerified === false ? ' It has not been checked end to end yet: "DevMate: Doctor" says whether it reaches this computer.' : '')
         // In a remote window the extension, and with it DevMate, runs on the remote computer.
@@ -492,13 +532,13 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
   async function loginCode() {
     const configured = await client.call('settings.read', {});
     if ((configured.active || configured.saved)?.auth?.mode !== 'oauth') {
-      const picked = await vscode.window.showInformationMessage('Sign-in is off for this DevMate, so there is no code to copy. To require sign-in, configure the connection and choose "Require sign-in".', 'Configure Connection');
+      const picked = await notify.showInformationMessage('Sign-in is off for this DevMate, so there is no code to copy. To require sign-in, configure the connection and choose "Require sign-in".', 'Configure Connection');
       if (picked === 'Configure Connection') await vscode.commands.executeCommand?.('devMate.runtime.configureConnection');
       return;
     }
     const issued = await client.call('auth.code.create', {});
     await vscode.env.clipboard.writeText(issued.code);
-    await vscode.window.showInformationMessage('Copied a one-time sign-in code. Paste it on the DevMate authorization page; it expires in 10 minutes.');
+    await notify.showInformationMessage('Copied a one-time sign-in code. Paste it on the DevMate authorization page; it expires in 10 minutes.');
   }
   async function restart() {
     await client.stop();
@@ -514,7 +554,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     return saved;
   }
   async function connectionWizard() {
-    const ask = (prompt, options = {}) => vscode.window.showInputBox({ title: 'DevMate: Configure Connection', prompt, ignoreFocusOut: true, ...options });
+    const ask = (prompt, options = {}) => notify.showInputBox({ title: 'DevMate: Configure Connection', prompt, ignoreFocusOut: true, ...options });
     const hostName = value => /^(https?:\/\/)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d+)?(\/.*)?$/i.test(value.trim()) ? null : 'Enter a host name such as devmate.example.com';
     const httpsAddress = value => { try { return new URL(value.trim()).protocol === 'https:' ? null : 'The address starts with https://'; } catch { return 'Enter the full address, for example https://devmate.example.com/mcp'; } };
     const choice = await vscode.window.showQuickPick([
@@ -596,8 +636,8 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     // Settings are validated and saved first: a rejected configuration must not leave a stored credential behind.
     await client.call('settings.replace', { config });
     if (secret) await client.call('secret.set', { name: secret[0], value: secret[1] });
-    const ingress = state.record?.ingressPort || config.ingressPort || (state.record?.port || Number(settings().get('runtimePort', 8788))) + 1;
-    const answer = await vscode.window.showWarningMessage('Connection saved. Restart the shared DevMate runtime to apply it?',
+    const ingress = state.record?.ingressPort || config.ingressPort || (state.record?.port || Number(settings().get('runtimePort') ?? 8788)) + 1;
+    const answer = await notify.showWarningMessage('Connection saved. Restart the shared DevMate runtime to apply it?',
       { modal: true, detail: 'Other windows and connected clients reconnect after the restart.' +
         (choice.kind === 'cloudflare' ? ' In the Cloudflare dashboard, route the hostname to http://127.0.0.1:' + ingress + '.'
           : choice.kind === 'external-https' ? ' Point your proxy at http://127.0.0.1:' + ingress + '.' : '') }, 'Restart now');
@@ -622,7 +662,9 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const connect = () => suppliedClient || clientFactory({
       instanceRoot: settings().get('runtimeInstanceDirectory',''),
       nodePath: settings().get('nodeCommandPath',''),
-      port: settings().get('runtimePort',8788),
+      // (Only a port the owner set, in any scope of the settings: one they left alone is not named, and a start takes
+      // the port the runtime ran on last.)
+      ...(chosenPort() !== undefined ? { port: chosenPort() } : {}),
       windowId
     });
     client = connect();
@@ -648,7 +690,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const handlers = {
       start: async () => { await client.start(); return refresh(); },
       stop: async () => {
-        const confirmation=await vscode.window.showWarningMessage(
+        const confirmation=await notify.showWarningMessage(
           'Stop the shared DevMate runtime for every connected VS Code window, CLI and ChatGPT session?',
           {modal:true},'Stop shared runtime');
         if (confirmation !== 'Stop shared runtime') return;
@@ -656,7 +698,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
         return refresh();
       },
       restart: async () => {
-        const confirmation = await vscode.window.showWarningMessage('Restart the shared DevMate runtime? Other windows and connected clients reconnect.',
+        const confirmation = await notify.showWarningMessage('Restart the shared DevMate runtime? Other windows and connected clients reconnect.',
           { modal: true }, 'Restart');
         if (confirmation === 'Restart') return restart();
       },
@@ -737,4 +779,4 @@ function deactivate() {
   return existing?.deactivate();
 }
 
-module.exports = {activate,deactivate,createVscodeRuntimeEntry};
+module.exports = {activate,deactivate,createVscodeRuntimeEntry,notifier};

@@ -19,7 +19,7 @@ function fixture(t, { registered = true, running = true, settings = {}, answers 
     calls: [], contexts: [], notices: [], bridges: [], statusText: '', commands: new Map(), events: {}, subscription: null, disposed: 0, copied: [],
     connection: {}, detachFails: false, workbenchLinks: 0, asked: [] };
   const client = {
-    status: async () => state.running ? { running: true, state: 'ready', record: { generation: state.generation }, ...(state.outdated ? { outdated: true } : {}) }
+    status: async () => state.running ? { running: true, state: 'ready', record: { generation: state.generation }, ...(state.outdated ? { outdated: true } : {}), ...(state.filesGone ? { health: { filesGone: true } } : {}) }
       : { running: false, state: 'stopped', ...(state.crashed ? { crashed: true } : {}) },
     start: async () => { state.running = true; },
     stop: async () => { state.running = false; state.hosts = []; state.windows.clear(); },
@@ -196,6 +196,26 @@ test('a stopped runtime is shown, its listener is given up, and a start attaches
   f.state.outdated = true;
   await f.entry.sync();
   assert.equal(f.state.statusText, 'DevMate: vault attached · restart the runtime to update');
+  // A runtime that holds its instance and does not answer for a moment is busy, not stopped: the vault stays attached
+  // and its listener is kept. (Taken for stopped, the vault was let go for the length of one look.)
+  const listeners = f.state.bridges.length, answers = f.client.status;
+  f.client.status = async () => ({ running: false, state: 'unavailable', processAlive: true });
+  await f.entry.sync();
+  assert.deepEqual([f.entry.status().vault, f.entry.status().running, f.state.bridges.at(-1).disposed, f.state.bridges.length], ['attached', true, false, listeners]);
+  assert.equal(f.state.statusText, 'DevMate: vault attached · busy, it does not answer at the moment');
+  f.client.status = answers;
+  await f.entry.sync();
+  assert.equal(f.state.statusText, 'DevMate: vault attached · restart the runtime to update');
+  // A runtime that says it is stopping is not busy: it is on its way out, and the vault is let go as before.
+  f.client.status = async () => ({ running: false, state: 'stopping', processAlive: true });
+  await f.entry.sync();
+  assert.deepEqual([f.entry.status().vault, f.entry.status().running], ['detached', false]);
+  f.client.status = answers;
+  await f.entry.sync();
+  // The folder it was started from is gone under it: said until it is started again, before anything else.
+  f.state.filesGone = true;
+  await f.entry.sync();
+  assert.equal(f.state.statusText, 'DevMate: vault attached · its files were removed by an update, restart the runtime');
 });
 
 test('an explicit detach holds until the next explicit attach; the setting can switch automatic attach off', async t => {

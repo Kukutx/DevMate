@@ -13,6 +13,30 @@ export function defineFileOperations(service, add) {
     return lines.map((value, index) => String(first + index).padStart(6) + '\t' + value.replace(/\r$/, '')).join('\n');
   };
   const stdout = result => result.stdout || '(no output)';
+  // On Windows a file another program holds for a moment cannot be changed until it is let go (workspace.mjs says
+  // so with file_busy, and has changed nothing). The whole change is made again, a little later each time, for up to
+  // twenty seconds. Between the tries the runtime is free: other calls are served while this one waits.
+  const FILE_BUSY_PATIENCE_MS = 20000;
+  async function patiently(change) {
+    for (let attempt = 0, waited = 0; ; attempt++) {
+      try { return await change(); }
+      catch (failure) {
+        const pause = Math.min(1000, 100 * 2 ** attempt);
+        if (failure?.code !== 'file_busy' || failure.incomplete) throw failure;
+        if (waited + pause > (service.fileBusyPatienceMs ?? FILE_BUSY_PATIENCE_MS)) {
+          // A program that holds a file for a moment has let go long before this. What refuses for this long is a
+          // program that keeps the file open, or permissions that do not let this account change it: Windows gives
+          // the same answer for both.
+          // (Not only at its end: workspace.patch says what became of the rest of the patch after it.)
+          failure.message = failure.message.replace(' Try again in a moment.', '') + ' It stayed so for ' + Math.max(1, Math.round(waited / 1000)) +
+            ' second(s) of trying again: a program keeps it open, or this account is not allowed to change it (its permissions).';
+          throw failure;
+        }
+        await new Promise(resolve => setTimeout(resolve, pause));
+        waited += pause;
+      }
+    }
+  }
   const scope = z.string().max(4096).default('');
   const ref = z.string().max(250).optional();
   for (const [name, method, shape, readOnly, description, options] of [
@@ -40,8 +64,9 @@ export function defineFileOperations(service, add) {
         result.files.map(file => '  ' + file.operation.padEnd(7) + (file.previousPath ? file.previousPath + ' → ' : '') + file.path + (file.additions !== undefined ? '  (+' + file.additions + ' −' + file.removals + ')' : '') +
           (file.lines ? '  at line ' + file.lines.join(', ') : '')).join('\n') +
         (result.since !== undefined ? '\nTake all of it back with workspace_restore {since:' + result.since + '}.' : '') }],
-    ['workspace.write', 'write', { path: projectPath, text: fileText, expectedSha256: sha.nullable().optional(), overwrite: z.boolean().optional(), ...mutation }, false,
-      'Create a new file, creating missing folders. To replace an existing file pass its sha256 from workspace_read as expectedSha256 (or overwrite:true to replace it whatever it holds); to change part of a file prefer workspace_edit. The previous version stays restorable.'],
+    ['workspace.write', 'write', { path: projectPath, text: fileText, expectedSha256: sha.nullable().optional(), overwrite: z.boolean().optional(),
+      append: z.boolean().optional().describe('Add the text to the end of the file itself instead of replacing it; a file that is not there is created.'), ...mutation }, false,
+      'Create a new file, creating missing folders. To replace an existing file pass its sha256 from workspace_read as expectedSha256 (or overwrite:true to replace it whatever it holds); to change part of a file prefer workspace_edit. The previous version stays restorable. A file is replaced by a new one: a program that has it open to write to it, such as a server and its log, keeps the old one. Add to such a file with append.'],
     ['workspace.mkdir', 'mkdir', { path: projectPath, ...mutation }, false, 'Create a project directory, including missing parents.', { idempotent: true }],
     ['workspace.move', 'move', { from: projectPath, to: projectPath, overwrite: z.boolean().optional(), ...mutation }, false, 'Move or rename a project file or directory, creating missing destination folders. overwrite:true lets a file replace a file; the replaced file stays restorable.'],
     ['workspace.delete', 'remove', { path: projectPath, recursive: z.boolean().optional(), force: z.boolean().optional(), ...mutation }, false,
@@ -75,6 +100,7 @@ export function defineFileOperations(service, add) {
     ['git.branches', 'gitBranches', {}, true, 'List local and remote branches and the current branch.']
   ]) {
     // A page of a file is sized for a model's client, except at this computer.
-    add(name, { ...projectScope, ...shape }, readOnly, description, (args, context) => service.workspace[method](service.project(args.projectId, { write: !readOnly }), args, { local: context.surface === 'local' }), options);
+    const direct = (args, context) => service.workspace[method](service.project(args.projectId, { write: !readOnly }), args, { local: context.surface === 'local' });
+    add(name, { ...projectScope, ...shape }, readOnly, description, readOnly ? direct : (args, context) => patiently(() => service.workspace.quickly(() => direct(args, context))), options);
   }
 }

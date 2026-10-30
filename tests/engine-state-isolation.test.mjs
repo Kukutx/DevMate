@@ -49,7 +49,9 @@ test('two real preview servers are isolated even with the same workspace id',asy
   await assert.rejects(fetch(pa.url));assert.equal((await fetch(pb.url)).status,200);
   await assert.rejects(startPreview(a.previews,{workspaceId:'same',root}),/shutting down/);
 });
-test('real owned Chromium profiles survive closing a different engine instance',{skip:!chrome?'No installed Chromium':false,timeout:30000},async t=>{
+// (Two real browsers are started here, each with a profile of its own. Thirty seconds were not always enough for
+// that on a Windows runner of the CI, where the run then ended red although the file passed when it was run again.)
+test('real owned Chromium profiles survive closing a different engine instance',{skip:!chrome?'No installed Chromium':false,timeout:120000},async t=>{
   const directory=await fsp.mkdtemp(path.join(os.tmpdir(),'devmate-browser-isolation-'));
   const a=createEngineState('devmate.browser-control',path.join(directory,'a')),b=createEngineState('devmate.browser-control',path.join(directory,'b'));
   t.after(async()=>{await Promise.all([shutdownBrowserControl(a),shutdownBrowserControl(b)]);await fsp.rm(directory,{recursive:true,force:true});});
@@ -65,7 +67,7 @@ test('real owned Chromium profiles survive closing a different engine instance',
   await assert.rejects(startBrowserControl(a,options),/closed/);
   assert.notEqual(one.session.id,two.session.id);
 });
-test('Browser QA cancellation closes only that run while a peer run completes',{skip:!chrome?'No installed Chromium':false,timeout:30000},async t=>{
+test('Browser QA cancellation closes only that run while a peer run completes',{skip:!chrome?'No installed Chromium':false,timeout:120000},async t=>{
   const root=await fsp.mkdtemp(path.join(os.tmpdir(),'devmate-qa-isolation-'));
   await fsp.writeFile(path.join(root,'index.html'),'<title>QA isolation</title><p>ready</p>');
   const previewState=createEngineState('devmate.browser-qa').previews;
@@ -74,7 +76,7 @@ test('Browser QA cancellation closes only that run while a peer run completes',{
   t.after(async()=>{state.abort.abort();await Promise.all([...state.browsers].map(browser=>browser.close()));await shutdownPreviews(previewState);await fsp.rm(root,{recursive:true,force:true});});
   const options={workspaceRoot:process.cwd(),url:preview.url,settings:browserSettings,actions:[{type:'wait',ms:500}]};
   const settled=Promise.allSettled([runBrowserScenario(state,{...options,signal:a.signal}),runBrowserScenario(state,{...options,signal:b.signal})]);
-  await waitFor(()=>state.browsers.size===2);a.abort(new Error('Cancel only first run'));
+  await waitFor(()=>state.browsers.size===2,60000);a.abort(new Error('Cancel only first run'));
   const results=await settled;
   assert.equal(results[1].status,'fulfilled');assert.equal(results[1].value.ok,true);
   assert.equal(state.browsers.size,0);assert.equal(state.abort.signal.aborted,false);assert.equal(b.signal.aborted,false);

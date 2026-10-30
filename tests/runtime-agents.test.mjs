@@ -647,8 +647,8 @@ test('a delegated Codex gets DevMate\'s MCP servers only: every configured serve
     FIXTURE_MCP_STATUS:JSON.stringify([{name:'channel',runtimeStatus:'connected',tools:{agent_peers:{}}},{name:'rea',runtimeStatus:'disabled',tools:{}},{name:'broken',runtimeStatus:'failed',tools:{}}])}});
   await adapter.start();
   const launch=events.find(e=>e.native?.method==='fixture/launch').native.params;
-  assert.deepEqual(launch.argv,['app-server','-c','mcp_servers.rea.enabled=false','-c','mcp_servers.jadx-headless-local.enabled=false','-c','features.apps=false'],
-    'enabled servers are disabled by name; an already disabled one is left alone');
+  assert.deepEqual(launch.argv,['app-server','-c','mcp_servers.rea.enabled=false','-c','mcp_servers.jadx-headless-local.enabled=false','-c','features.apps=false','-c','features.plugins=false'],
+    'enabled servers are disabled by name; an already disabled one is left alone; and so is what brings further servers: the account\'s connectors and the plugins');
   // A server of the owner's under the very name DevMate passes would be merged with it key by key: that is refused, with the way out.
   const clashing=await setup(t,'codex','mcp',{mcpServers:[channel],env:{FIXTURE_MCP:JSON.stringify([{name:'channel',enabled:true,transport:{type:'streamable_http',url:'http://127.0.0.1:8788/mcp'}}])}});
   await assert.rejects(clashing.adapter.start(),error=>error.code==='mcp_isolation_failed'&&/its own MCP server named "channel"/.test(error.message)&&/codex mcp remove channel/.test(error.message));
@@ -658,6 +658,16 @@ test('a delegated Codex gets DevMate\'s MCP servers only: every configured serve
   const thread=events.find(e=>e.native?.method==='fixture/thread').native.params;
   assert.equal(thread.method,'thread/start');assert.equal(thread.request.approvalsReviewer,'user');
   assert.deepEqual(thread.request.config.mcp_servers.channel,{command:process.execPath,args:['host-channel.mjs'],enabled:true,env:{BOUND_AGENT:'one'}});
+  // The thread is told all of it again. What a thread is given takes the place of what the process was started with,
+  // table by table: with only DevMate's server named here, the real Codex 0.161.0 had every other server back.
+  assert.deepEqual(Object.keys(thread.request.config.mcp_servers).sort(),['channel','jadx-headless-local','rea']);
+  assert.deepEqual([thread.request.config.mcp_servers.rea,thread.request.config.mcp_servers['jadx-headless-local']],[{enabled:false},{enabled:false}]);
+  assert.deepEqual(thread.request.config.features,{apps:false,plugins:false});
+  // An owner who lets delegated sessions have their servers gets Codex as it is configured: nothing is switched off.
+  const shared=await setup(t,'codex','mcp',{mcpServers:[channel],inheritMcpServers:true,env:{FIXTURE_MCP:ownerServers,FIXTURE_MCP_STATUS:'[]'}});
+  await shared.adapter.start();
+  assert.deepEqual(shared.events.find(e=>e.native?.method==='fixture/launch').native.params.argv,['app-server']);
+  assert.deepEqual(shared.events.find(e=>e.native?.method==='fixture/thread').native.params.request.config,{mcp_servers:{channel:{command:process.execPath,args:['host-channel.mjs'],enabled:true,env:{BOUND_AGENT:'one'}}}});
 });
 test('Codex start fails closed when a server DevMate did not provide is still reachable, or when the servers cannot be listed',async t=>{
   const leaking=await setup(t,'codex','mcp',{mcpServers:[channel],env:{FIXTURE_MCP:'[]',FIXTURE_LEAVE_AFTER_STATUS:'1',

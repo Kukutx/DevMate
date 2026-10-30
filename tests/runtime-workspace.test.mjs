@@ -118,7 +118,7 @@ test('binary and invalid UTF-8 are not editable text, and a file with a second n
   fs.writeFileSync(path.join(root,'invalid.txt'),Buffer.from([0xff]));
   fs.writeFileSync(path.join(root,'original.txt'),'original');
   fs.linkSync(path.join(root,'original.txt'),path.join(root,'alias.txt'));
-  assert.throws(()=>service.read(project,{path:'binary.dat'}),error=>error.code==='binary_file'&&/operations_call workspace\.read_bytes/.test(error.message));
+  assert.throws(()=>service.read(project,{path:'binary.dat'}),error=>error.code==='binary_file'&&/operations_query workspace\.read_bytes/.test(error.message));
   // A file with two names (a hard link, as package managers make them) is read like any other. Changing it would change
   // what its other name shows, possibly outside the project, so that stays refused.
   assert.equal(service.read(project,{path:'alias.txt'}).text,'original');
@@ -254,7 +254,7 @@ test('an edit keeps the line endings of a CRLF file, listings say what they leav
   assert.equal(service.files({...project,protectSecrets:false},{}).withheld,undefined,'without the protection nothing is kept back');
   const found=await service.find(project,{pattern:'**/*.txt'});
   assert.deepEqual(found.items.map(item=>item.path),['mixed.txt','second-name.txt','windows.txt']);assert.equal(found.withheld,1);
-  assert.throws(()=>service.read(project,{path:'credentials/login.txt'}),error=>error.code==='protected_workspace_path'&&/owner can lift that/.test(error.message));
+  assert.throws(()=>service.read(project,{path:'credentials/login.txt'}),error=>error.code==='protected_workspace_path'&&/Its owner lifts that for the project on their own computer: in the local workbench \(devmate ui\), or with devmate project\.update\./.test(error.message));
   // One very long line in a search hit is cut with a mark.
   fs.rmSync(path.join(root,'second-name.txt'));
   fs.writeFileSync(path.join(root,'wide.txt'),'needle '+'x'.repeat(5000)+'\n');

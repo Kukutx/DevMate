@@ -52,13 +52,15 @@ export function validateVersions(directory){
   assert.equal(lock.packages?.['']?.version,VERSION,'package-lock.json states another version for its root package.');
   assert.equal(read('plugin.json').version,VERSION,'plugin.json states another version.');
   assert.equal(obsidian.version,VERSION,'manifest.json (Obsidian) states another version.');
+  // By this number a runtime decides whether its copy of the extension replaces the one a browser loads.
+  assert.equal(read('chrome-extension/manifest.json').version,VERSION,'chrome-extension/manifest.json (the browser extension) states another version.');
   assert.equal(read('versions.json')[VERSION],obsidian.minAppVersion,'versions.json must map this version to the minAppVersion of manifest.json.');
   assert.ok(fs.readFileSync(path.join(directory,'CHANGELOG.md'),'utf8').split(/\r?\n/).includes('## '+VERSION),'CHANGELOG.md has no section for version '+VERSION+'.');
   // The number is the owner's to change. AGENTS.md records the one they approved; any other number stops here,
   // before it can be committed, tagged or published.
   const approved=/^- Owner-approved version: (\d+\.\d+\.\d+)\./m.exec(fs.readFileSync(path.join(directory,'AGENTS.md'),'utf8'))?.[1];
   assert.ok(approved,'AGENTS.md must state the version the owner approved, as a line "- Owner-approved version: <number>."');
-  assert.equal(VERSION,approved,'The version is '+VERSION+', but the owner approved '+approved+' (AGENTS.md). Only the owner changes it: set the version back, do not edit that line.');
+  assert.equal(VERSION,approved,'The version is '+VERSION+', but the owner approved '+approved+' (AGENTS.md). Only the owner changes it: state the approved version in every file (npm run version:set -- '+approved+', which makes or takes back the changelog section and the entry in versions.json as that needs), do not edit that line.');
 }
 // Every action a workflow runs is named by its commit, so a moved tag cannot change what runs with this repository's permissions.
 export function validateWorkflows(directory){
@@ -74,7 +76,10 @@ export function validateWorkflows(directory){
 // The words are put together from pieces so that this file passes. AGENTS.md states the rule and may name them;
 // the lock file and the bundle hold other people's text. The MCP SDK calls the 2025 protocol revision by that word
 // in one function and one option DevMate has to use: those two names are the SDK's, not DevMate's past.
-const RETIRED=new RegExp([String.fromCharCode(110,103,114,111,107),'(?<!is)leg'+'acy(?!Request|: \'reject\')','(?<![\\d.])3\\.'+'[x8](?!\\d)','tunnel'+' program','program'+'Exists'].join('|'),'i');
+// A number with its unit is a measurement, not a version: a time or a size that happens to read like one is let through.
+const MEASURED='(?!\\s?(?:ms|s|seconds?|秒|毫秒|分钟|[KMG]i?B|%|倍|×)(?![A-Za-z]))';
+const RETIRED=new RegExp([String.fromCharCode(110,103,114,111,107),'(?<!is)leg'+'acy(?!Request|: \'reject\')','(?<![\\d.])3\\.'+'[x8](?!\\d)'+MEASURED,'tunnel'+' program','program'+'Exists'].join('|'),'i');
+export const retiredWording=line=>RETIRED.test(line);
 const UNCHECKED=new Set(['AGENTS.md','package-lock.json','workbench/bridge.bundle.js']);
 export function validateWording(directory){
   // A copy without its repository (an unpacked archive) has no list of tracked files to read.
