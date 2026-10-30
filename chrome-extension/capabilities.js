@@ -68,6 +68,7 @@ export function createCapabilities(chrome, { version = '', ownPort = () => undef
       try {
         const at = new URL(address);
         if (at.protocol === 'chrome-extension:' && at.host === chrome.runtime?.id) return 'This tab is a page of the DevMate extension itself. It is not read or worked through the browser.';
+        if (at.protocol === 'file:') return 'This tab shows a file of this computer (file://). Files are read by the rules of the project they are in (workspace_read), not through the browser, where those rules would not hold.';
         if (/^(127\.0\.0\.1|localhost|\[::1\])$/.test(at.hostname) && (Number(at.port) === ownPort() || tab.title === 'DevMate Workbench'))
           return 'This tab is DevMate\'s own workbench, where the owner decides at the computer. It is not read, worked or sent elsewhere through the browser.';
       } catch { /* not an address: nothing of DevMate's */ }
@@ -227,7 +228,8 @@ export function createCapabilities(chrome, { version = '', ownPort = () => undef
   // stops at the first step that fails, and says which one, and how many were not done. It stops as well before a step
   // once the owner has paused DevMate's use of the browser, once the debugger was taken off the tab while it ran (the
   // owner took it off, or the tab went), and once its time is up: the runtime waits for a run no longer than that.
-  methods['page.run'] = async ({ tabId, steps } = {}) => {
+  methods['page.run'] = async ({ tabId, steps, withinMs } = {}) => {
+    const within = Number.isInteger(withinMs) && withinMs > 0 ? Math.min(withinMs, RUN_MS) : RUN_MS;
     if (!Array.isArray(steps) || !steps.length || steps.length > 30) throw fail('invalid_input', 'steps is a list of 1 to 30 steps, each { method, input }.');
     for (const [at, step] of steps.entries()) {
       if (!step || typeof step !== 'object' || Array.isArray(step) || !RUN_STEPS.includes(step.method)) throw fail('invalid_input', 'Step ' + (at + 1) + ': method is one of ' + RUN_STEPS.join(', ') + '.');
@@ -239,8 +241,8 @@ export function createCapabilities(chrome, { version = '', ownPort = () => undef
     let watched = debug.debugging().includes(page.id);
     for (const [at, step] of steps.entries()) {
       const stop = at > 0 && await paused() ? { code: 'paused', message: 'The owner paused DevMate\'s use of this browser while the run went on: this step and those after it were not done.' }
-        : watched && !debug.debugging().includes(page.id) ? { code: 'browser_error', message: 'The debugger was taken off this tab while the run went on: the owner took it off, or the tab was closed. This step and those after it were not done.' }
-        : (debugging.clock || Date.now)() - began > RUN_MS ? { code: 'timeout', message: 'The run took longer than its ' + RUN_MS / 60000 + ' minutes: this step and those after it were not done.' } : null;
+        : watched && !debug.debugging().includes(page.id) ? { code: 'browser_error', message: 'The debugger was taken off this tab while the run went on (the owner took it off, the tab was closed, or it went to a page the debugger does not go to). This step and those after it were not done.' }
+        : (debugging.clock || Date.now)() - began > within ? { code: 'timeout', message: 'The run took longer than DevMate waits for it (' + Math.round(within / 1000) + ' seconds): this step and those after it were not done.' } : null;
       done.push({ method: step.method, ...(stop ? { ok: false, error: stop } : await answer(methods, step.method, { ...step.input, tabId: page.id })) });
       watched ||= debug.debugging().includes(page.id);
       if (!done.at(-1).ok) return { tabId: page.id, steps: done, failed: at + 1, notDone: steps.length - at - 1, untrusted: true };

@@ -276,7 +276,9 @@ async function calling(name, input) {
   if (!context || typeof context.executeTool !== 'function') return { problem: 'none' };
   const tools = [...await context.getTools()], tool = tools.find(one => one.name === name);
   if (!tool) return { problem: 'unknown', names: tools.slice(0, 50).map(one => String(one.name)) };
-  const result = await context.executeTool(tool, input);
+  let result = await context.executeTool(tool, input);
+  // Chrome hands a tool's answer over as JSON text (seen in Chrome 156): it is read back as what it says.
+  if (typeof result === 'string') { try { result = JSON.parse(result); } catch { /* text, as it is */ } }
   try { return { result: JSON.parse(JSON.stringify(result ?? null)) }; } catch { return { result: String(result) }; }
 }
 const inPage = (work, ...given) => '(' + work + ')(' + given.map(value => JSON.stringify(value)).join(', ') + ')';
@@ -750,18 +752,21 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     'page.upload': async ({ tabId, ref, selector, text: shown, files } = {}) => {
       if (!Array.isArray(files) || !files.length || files.length > 20 || files.some(file => typeof file !== 'string' || !file || file.length > 4096)) throw fail('invalid_input', 'files is a list of 1 to 20 paths.');
       const { id, session } = await page(tabId);
-      const done = await unlessDialog(session, async () => {
-        const objectId = await element(id, { ref, selector, text: shown }), kind = await onElement(id, objectId, fileField);
+      // Under the watch for a dialog as a click is: nothing is put in once one has opened, and once the files were
+      // handed over, a dialog the page answers them with is said with them.
+      return acting(session, async (halted, did) => {
+        const objectId = await element(id, { ref, selector, text: shown });
+        if (halted()) return;
+        const kind = await onElement(id, objectId, fileField);
+        if (halted()) return;
         if (!kind) throw fail('invalid_input', 'This element is not a file field (<input type="file">). A button that opens one is clicked by the page to show the field: page.snapshot or page.inspect finds the field itself.');
         if (kind === 'one' && files.length > 1) throw fail('invalid_input', 'This file field takes one file, and ' + files.length + ' were given.');
+        did();
         await raw(id, 'DOM.setFileInputFiles', { objectId, files }).catch(error => {
           throw /not allowed|file access|permission/i.test(said(error)) ? fail('forbidden', 'The browser does not let the DevMate extension hand files to a page. The owner switches on "Allow access to file URLs" for it, in the browser\'s extensions page (DevMate, Details).')
             : fail('browser_error', 'DOM.setFileInputFiles failed: ' + said(error));
         });
-        return true;
-      });
-      if (done === DIALOG) return withDialog(session, { tabId: id });
-      return { tabId: id, uploaded: files.map(file => file.split(/[\\/]/).pop()) };
+      }, () => ({ tabId: id, uploaded: files.map(file => file.split(/[\\/]/).pop()) }));
     },
     'page.scroll': async ({ tabId, ref, selector, deltaY } = {}) => {
       const { id, session } = await page(tabId);
@@ -791,9 +796,9 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       if (input !== undefined && (input === null || typeof input !== 'object' || Array.isArray(input))) throw fail('invalid_input', 'input is an object: what the tool takes, as its inputSchema in page.tools says.');
       const { id, session } = await page(tabId), answer = await unlessDialog(session, () => run(id, inPage(calling, tool, input ?? {}), { awaitPromise: true, gesture: true }));
       if (answer === DIALOG) return withDialog(session, { tabId: id, tool });
-      const { problem, names, result } = answer.value || {};
+      const { problem, result } = answer.value || {};
       if (problem === 'none') throw fail('not_supported', 'This browser gives the page no WebMCP, so it offers no tools here.');
-      if (problem === 'unknown') throw fail('not_found', 'The page offers no tool named ' + tool + '. It offers: ' + (names.join(', ') || 'none') + '.');
+      if (problem === 'unknown') throw fail('not_found', 'The page offers no tool named ' + tool + '. page.tools lists those it offers.');
       const shown = typeof result === 'string' ? result : JSON.stringify(result);
       return { tabId: id, tool, ...(shown.length > 20000 ? { text: shown.slice(0, 20000), truncated: true, totalChars: shown.length } : { result }), untrusted: true };
     },

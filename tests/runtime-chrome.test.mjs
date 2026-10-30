@@ -968,10 +968,11 @@ test('a run of page methods is held step by step to what each method takes alone
   const run = (steps, options) => link.call({ capability: 'chrome.page.run', input: { tabId: 4, steps } }, options);
   const steps = [{ method: 'page.waitFor', input: { text: 'Saved', timeoutMs: 500 } }, { method: 'page.click', input: { ref: 13 } }, { method: 'page.press', input: { key: 'Enter' } }];
   assert.deepEqual(await run(steps), { by: first });
-  assert.deepEqual(given.at(-1), { tabId: 4, steps });
+  // The extension is told how long the run is waited for: the time of its steps, less a margin.
+  assert.deepEqual(given.at(-1), { tabId: 4, steps, withinMs: 85000 });
   // A step without input is passed on with an empty one.
   await run([{ method: 'page.read' }]);
-  assert.deepEqual(given.at(-1).steps, [{ method: 'page.read', input: {} }]);
+  assert.deepEqual(given.at(-1), { tabId: 4, steps: [{ method: 'page.read', input: {} }], withinMs: 25000 });
   // Whatever a step's own method would refuse, the run refuses, before the browser hears of it.
   const count = given.length, refused = async (wrong, message) => {
     const failure = await run(wrong).then(() => null, error => error);

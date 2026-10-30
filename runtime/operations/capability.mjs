@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { z } from 'zod';
 import { DomainError } from '../store.mjs';
 import { BROWSER_ENGINE, isBrowserCapability } from '../chrome.mjs';
-import { DESKTOP_ENGINE, isDesktopCapability } from '../desktop.mjs';
+import { DESKTOP_ENGINE, SWITCH_ON, isDesktopCapability } from '../desktop.mjs';
 import { resolveProjectPath } from '../workspace.mjs';
 import { hasWords, id, keywords, mutation, ownerCommand, projectScope } from './shared.mjs';
 
@@ -63,7 +63,7 @@ export function defineCapabilityOperations(service, add) {
   // Without a project these act on the whole runtime, so the project is optional and not filled in.
   add('capability.settings', { projectId: id.optional(), engine: engine.optional() }, true,
     'Read the settings of the capability engines (browser control and QA, Godot, reverse engineering, Obsidian): whether each is switched on and how it is set up. With projectId the values that apply to that project.',
-    args => service.capabilities.settings(args));
+    args => args.engine === DESKTOP_ENGINE ? service.desktop.settings() : service.capabilities.settings(args));
   add('capability.configure', { projectId: id.optional(), engine: engine.min(1), settings: z.record(z.string(), z.unknown()), ...mutation }, false,
     'Change settings of one capability engine for the whole runtime, or with projectId for one project. A null value restores the default; enabled:false switches the engine off. A connected client can only switch an engine off; everything else is set up by the owner on their own computer, or by a connected client when the owner chose the full access profile.',
     (args, context) => {
@@ -73,6 +73,14 @@ export function defineCapabilityOperations(service, add) {
       // Reading and writing the memory of other processes is switched on at this computer and nowhere else, in either profile.
       if (context.surface !== 'local' && (args.settings.allowProcessAccess || args.settings.allowMemoryWrite))
         throw new DomainError('forbidden', 'Access to the memory of other processes is switched on by the owner on their own computer: ' + ownerCommand('capability.configure', '{"engine":"reverse","settings":{"allowProcessAccess":true}}'));
+      // Reading the owner's windows reaches past what is shared: it is switched on at this computer and nowhere else.
+      if (args.engine === DESKTOP_ENGINE) {
+        if (context.surface !== 'local' && Object.values(args.settings).some(value => value !== false))
+          throw new DomainError('forbidden', 'Reading the owner\'s windows is switched on by the owner on their own computer: ' + SWITCH_ON + '. A connected client can only switch it off.');
+        const changed = service.desktop.configure(args.settings);
+        service.store.event('capability.desktop.configured', null, { keys: Object.keys(args.settings), scope: 'instance' });
+        return changed;
+      }
       return service.capabilities.configure(args);
     });
 }

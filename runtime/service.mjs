@@ -100,7 +100,7 @@ export class DevMateService {
     // The owner's browser, where the DevMate extension in it is connected (./chrome.mjs).
     this.browser = createBrowserLink();
     // The owner's windows, read on Windows (./desktop.mjs).
-    this.desktop = createDesktop();
+    this.desktop = createDesktop({ stored: value => value === undefined ? this.store.setting('engine-settings.desktop') : this.store.setting('engine-settings.desktop', value), fullAccess: () => this.fullAccess() });
     this.store = store || new Store(instanceRoot);
     this.instanceRoot = fs.realpathSync.native(instanceRoot);
     this.config = normalizeConfig(config);

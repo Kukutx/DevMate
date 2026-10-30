@@ -21,7 +21,7 @@ A capability is `<engine>.<name>`.
 | `reverse` | `reverse.*` | the runtime, optionally starting Python, Rizin/radare2 and Ghidra |
 | `obsidian` | `obsidian.*` | the Obsidian plugin of an attached vault |
 | `chrome` | `chrome.*`: the owner's own browser (bookmarks, tabs, windows, history, downloads, the reading list) and `chrome.page.*`, which debugs a page like DevTools | the DevMate extension in Chrome or Edge, through the program the browser starts for it |
-| `desktop` | `desktop.*`: the windows open on the owner's computer, the controls of one, and a picture of a window or of the screen; reads only | the runtime, through the Windows PowerShell that comes with Windows (Windows only for now) |
+| `desktop` | `desktop.*`: the windows open on the owner's computer, the controls of one, and a picture of a window or of the screen; reads only, once the owner has switched it on at the computer (or with full access) | the runtime, through the Windows PowerShell that comes with Windows (Windows only for now) |
 
 Configured external MCP servers are reached as `mcp.<serverId>.<operation>`.
 
@@ -67,7 +67,7 @@ Persistent processes started by an engine (`godot.run`) are ordinary project pro
 Every caller is the owner, at their computer or through a connected client. Some capabilities reach further than the project's files, and a connected client has them like any other:
 
 - all of `chrome.*`, which reaches furthest: the owner's own browser, signed in wherever the owner is. Its bookmarks, history and downloads, and with `chrome.page.*` any page open in it, are read and worked as the owner. It belongs to no project and no project's protection holds anything of it back; the owner connects it (`devmate chrome install`) and can pause it in the extension;
-- all of `desktop.*`: whatever is on the owner's screen, in any program, is read and pictured; it belongs to no project, and it clicks and types nowhere;
+- all of `desktop.*`, once the owner has switched it on at the computer or chosen full access: whatever is on the owner's screen, in any program, is read and pictured; it belongs to no project, and it clicks and types nowhere;
 - all of `browser-control.*`: a session is a browser on the owner's desktop and may hold a signed-in persistent profile;
 - `reverse.code_analyze`, `reverse.decompile`, `reverse.disassemble`: they start installed analysis programs;
 - everything under `mcp.*`: an external server has credentials and resources of its own.

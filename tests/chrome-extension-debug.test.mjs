@@ -656,7 +656,10 @@ test('page.tools lists what the page itself offers an agent, and page.callTool r
   called = { problem: 'none' };
   await refuses(methods['page.callTool']({ name: 'add_to_cart' }), 'not_supported', /^This browser gives the page no WebMCP/);
   called = { problem: 'unknown', names: ['search', 'checkout'] };
-  await refuses(methods['page.callTool']({ name: 'add_to_cart' }), 'not_found', /^The page offers no tool named add_to_cart\. It offers: search, checkout\.$/);
+  // What the page names its tools is its words: they are not put into an error, and an odd answer is not taken at its word.
+  await refuses(methods['page.callTool']({ name: 'add_to_cart' }), 'not_found', /^The page offers no tool named add_to_cart\. page\.tools lists those it offers\.$/);
+  called = { problem: 'unknown' };
+  await refuses(methods['page.callTool']({ name: 'add_to_cart' }), 'not_found', /page\.tools lists those it offers/);
   called = { result: 'x'.repeat(20001) };
   assert.deepEqual(await methods['page.callTool']({ name: 'long' }), { tabId: 1, tool: 'long', text: 'x'.repeat(20000), truncated: true, totalChars: 20001, untrusted: true });
   for (const input of [null, [], 'sku', 5]) await refuses(methods['page.callTool']({ name: 'a', input }), 'invalid_input', /^input is an object/);
@@ -685,6 +688,11 @@ test('what page.tools and page.callTool run in the page stand on their own there
   assert.deepEqual(ran, [[tools[0], { q: 'shoes' }]]);
   assert.deepEqual(await page(call.replace('"search"', '"pay"'), { document: { modelContext: context } }), { problem: 'unknown', names: ['search', 'checkout'] });
   assert.deepEqual(await page(call, {}), { problem: 'none' });
+  // An answer given as JSON text, as Chrome gives it, is read as what it says; other text stays text.
+  context.executeTool = async () => '{"content":[{"type":"text","text":"added"}]}';
+  assert.deepEqual(await page(call, { document: { modelContext: context } }), { result: { content: [{ type: 'text', text: 'added' }] } });
+  context.executeTool = async () => 'Added it.';
+  assert.deepEqual(await page(call, { document: { modelContext: context } }), { result: 'Added it.' });
   // An answer that is no plain data is handed on as text.
   const circular = {}; circular.self = circular;
   context.executeTool = async () => circular;
@@ -713,12 +721,24 @@ test('page.upload puts the files the runtime names into a file field, as the own
   replies['DOM.setFileInputFiles'] = () => no('Node is not a file input element');
   await refuses(methods['page.upload']({ ref: 13, files }), 'browser_error', /^DOM\.setFileInputFiles failed: Node is not a file input element$/);
   for (const wrong of [undefined, [], 'a.txt', [''], [5], Array(21).fill('a'), ['a'.repeat(4097)]]) await refuses(methods['page.upload']({ ref: 13, files: wrong }), 'invalid_input', /^files is a list of 1 to 20 paths\.$/);
-  // A field whose page answers the choice with a dialog: the files are in it by then, and the dialog is said.
+  // A dialog that opens before the files are handed over ends the call, and they are not handed over afterwards.
   delete replies['DOM.setFileInputFiles'];
-  replies['Runtime.callFunctionOn'] = () => new Promise(() => {});
-  const putting = methods['page.upload']({ ref: 13, files });
+  let looked;
+  replies['Runtime.callFunctionOn'] = () => new Promise(resolve => { looked = resolve; });
+  const early = refuses(methods['page.upload']({ ref: 13, files }), 'dialog_open', /alert: "Too large"/);
   await settle(); say(1, 'Page.javascriptDialogOpening', { type: 'alert', message: 'Too large' });
-  assert.deepEqual(await putting, { tabId: 1, dialog: 'alert: "Too large"', note: DIALOG_NOTE, untrusted: true });
+  await early;
+  const handed = sent('DOM.setFileInputFiles').length;
+  await methods['page.dialog']({ accept: true });
+  looked({ result: { type: 'string', value: 'several' } }); await settle();
+  assert.equal(sent('DOM.setFileInputFiles').length, handed, 'nothing was put in once the dialog had opened');
+  // One the page answers the files with: they are in the field by then, and both are said.
+  replies['Runtime.callFunctionOn'] = { result: { type: 'string', value: 'several' } };
+  replies['DOM.setFileInputFiles'] = () => new Promise(() => {});
+  const late = methods['page.upload']({ ref: 13, files });
+  await settle(); say(1, 'Page.javascriptDialogOpening', { type: 'alert', message: 'Too large' });
+  assert.deepEqual(await late, { tabId: 1, uploaded: ['report.pdf', 'photo.png'], dialog: 'alert: "Too large"', note: DIALOG_NOTE, untrusted: true });
+  assert.equal(sent('DOM.setFileInputFiles').length, handed + 1);
 });
 
 test('what page.upload asks the page stands on its own there: a file field, for one file or several, and nothing else', async () => {
@@ -754,6 +774,12 @@ test('page.run stops before a step once the owner has paused the browser, once t
   stand.replies['Accessibility.getFullAXTree'] = () => { time.now += 5 * 60 * 1000 + 1; return shop(); };
   const late = await methods['page.run']({ steps: [{ method: 'page.snapshot' }, { method: 'page.read' }] });
   assert.deepEqual([late.failed, late.steps[1].error.code], [2, 'timeout']);
+  // And sooner, once DevMate no longer waits for it (withinMs, from the runtime): its next step is not done.
+  stand.replies['Accessibility.getFullAXTree'] = () => { time.now += 61000; return shop(); };
+  const pressed = sent('Input.dispatchKeyEvent').length;
+  const over = await methods['page.run']({ withinMs: 60000, steps: [{ method: 'page.snapshot' }, { method: 'page.press', input: { key: 'Enter' } }] });
+  assert.deepEqual([over.failed, over.steps[1].error.code], [2, 'timeout']); assert.match(over.steps[1].error.message, /^The run took longer than DevMate waits for it \(60 seconds\)/);
+  assert.equal(sent('Input.dispatchKeyEvent').length, pressed, 'and Enter was not pressed');
 });
 
 test('a selector or a text goes into the page as data: whatever it says, none of it runs', async () => {
@@ -2082,6 +2108,16 @@ test('the workbench is known by its name where the port was not said, and only o
   Object.assign(open[1], { url: 'http://127.0.0.1:3000/', title: 'My app' });
   assert.equal((await methods['tabs.navigate']({ tabId: 2, url: 'https://elsewhere.example/' })).url, 'https://elsewhere.example/');
 });
+test('a tab that shows a file of this computer is not read or worked through the browser: files are read by the rules of their project', async () => {
+  const { methods, open, names } = extension({ 'Accessibility.getFullAXTree': shop() });
+  const FILE = /^This tab shows a file of this computer \(file:\/\/\)\. Files are read by the rules of the project they are in \(workspace_read\), not through the browser, where those rules would not hold\.$/;
+  for (const change of [{ url: 'file:///C:/Users/owner/.ssh/id_ed25519' }, { url: 'https://behind.example/', pendingUrl: 'file:///etc/passwd' }]) {
+    Object.assign(open[1], { pendingUrl: undefined }, change);
+    for (const [name, input] of Object.entries(OF_A_TAB)) await refuses(methods[name]({ tabId: 2, ...input }), 'not_supported', FILE);
+  }
+  assert.deepEqual(names(), [], 'the debugger never came near it');
+});
+
 test('a page of the extension itself, opened as a tab, is not read or worked through the browser', async () => {
   // The browser lets an extension debug its own pages (seen in a real Chrome), and a script run there has all the extension has.
   const stand = extension({ 'Accessibility.getFullAXTree': shop() });
