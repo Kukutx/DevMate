@@ -57,7 +57,7 @@ export function defineCapabilityOperations(service, add) {
   add('capability.query', { ...projectScope, capability: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()).default({}) }, true,
     'Invoke a read-only capability (readOnly:true in capability_list; also a dryRun capability with its dry run on): status, inspection, search, snapshots. It never changes anything; everything else goes through capability_call.', (args, context) =>
       ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), readOnly: true, caller: browserCaller(context) })
-        : ofDesktop(args) ? service.desktop.call(args, { signal: service.waitSignal(context) })
+        : ofDesktop(args) ? service.desktop.call(args, { signal: service.waitSignal(context), readOnly: true })
         : service.capabilities.call(args, { signal: service.waitSignal(context), readOnly: true }),
     { openWorld: true, withoutProject: ofOwner });
   // Without a project these act on the whole runtime, so the project is optional and not filled in.
@@ -76,7 +76,7 @@ export function defineCapabilityOperations(service, add) {
       // Reading the owner's windows reaches past what is shared: it is switched on at this computer and nowhere else.
       if (args.engine === DESKTOP_ENGINE) {
         if (context.surface !== 'local' && Object.values(args.settings).some(value => value !== false))
-          throw new DomainError('forbidden', 'Reading the owner\'s windows is switched on by the owner on their own computer: ' + SWITCH_ON + '. A connected client can only switch it off.');
+          throw new DomainError('forbidden', 'Reading the owner\'s windows, and acting in them, is switched on by the owner on their own computer: ' + SWITCH_ON + '. A connected client can only switch it off.');
         const changed = service.desktop.configure(args.settings);
         service.store.event('capability.desktop.configured', null, { keys: Object.keys(args.settings), scope: 'instance' });
         return changed;
