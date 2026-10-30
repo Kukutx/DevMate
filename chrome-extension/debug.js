@@ -5,13 +5,16 @@
 //
 // Chrome shows a bar while a tab is debugged. That is Chrome's rule, and the owner's way of seeing it. A tab is let go
 // after five minutes without a call, at once with page.debugStop, and when the owner pauses DevMate in the panel.
-// Only the page's own frame is covered: a frame inside it (an iframe) is shown in the snapshot with its address, and
-// what that frame holds is not reached. What a component of the page holds (a shadow tree) is.
+// A frame inside the page (an iframe) is shown in the snapshot with its address, and what it holds is listed under it
+// where the browser draws it in the same process (a page of the same site); a page of another site in a frame is not
+// reached. What a component of the page holds (a shadow tree) is.
 
 export const DEBUG_READ_ONLY = Object.freeze(['page.console', 'page.network', 'page.networkRequest', 'page.snapshot', 'page.inspect', 'page.storage', 'page.waitFor', 'page.tools']);
 const IDLE_MS = 5 * 60 * 1000, KEPT = 500;
 // How many of the refs the snapshots of one page gave are taken: the latest ones.
 const REFS_KEPT = 20000;
+// Of how many frames of a page a snapshot lists what they hold.
+const FRAMES_READ = 10;
 // How long a tab is given to answer the first thing the debugger asks of it (see open()).
 const SILENT_MS = 5000;
 // How long each asking for a picture of a tab that is put away is given before it is asked for again, and at last
@@ -598,42 +601,57 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       await raw(id, 'Accessibility.enable').catch(() => {});
       const { nodes } = await command(id, 'Accessibility.getFullAXTree'), byId = new Map(nodes.map(node => [node.nodeId, node]));
       // A frame of the page (an iframe) holds another page, which is not in this list. It is shown with the address
-      // of that page, named or not, so that a page whose content is in a frame does not look empty.
+      // of that page, named or not, so that a page whose content is in a frame does not look empty. Where that page is
+      // drawn by the same process as this one (a page of the same site), the browser gives its elements as well: they
+      // are listed under the frame, with refs like any other, for the first FRAMES_READ such frames. A page of another
+      // site is drawn elsewhere, and what it holds is not reached from here.
       // The address is asked for the first hundred frames as they are listed; one beyond those is shown without. A frame that
       // has no page of its own yet (about:blank) is shown with what it was told to load, and one whose content is
       // written into the page itself (srcdoc) has no address a tab could open.
       // Only an address a tab can be opened at is shown (http or https), not one that is a script or holds the content itself.
-      const framed = [], frames = new Map(), web = address => /^https?:\/\//i.test(address) ? address : '';
+      // frames: address of each frame by its node; inside: the tree of what a frame holds, where the browser gave it.
+      const framed = [], frames = new Map(), framesOf = new Map(), inside = new Map(), web = address => /^https?:\/\//i.test(address) ? address : '';
       for (const stack = [nodes.find(node => !node.parentId) || nodes[0]]; stack.length;) {
         const node = stack.pop();
         if (!node) continue;
-        if (!node.ignored && FRAMES.has(node.role?.value)) { framed.push(node); frames.set(node.nodeId, ''); }
+        if (!node.ignored && FRAMES.has(node.role?.value)) { framed.push(node); frames.set(node, ''); }
         for (const child of [...(node.childIds || [])].reverse()) stack.push(byId.get(child));
       }
       await Promise.all(framed.filter(node => node.backendDOMNodeId).slice(0, 100).map(async node => {
         const told = (await raw(id, 'DOM.describeNode', { backendNodeId: node.backendDOMNodeId }).catch(() => null))?.node, given = told?.attributes || [], named = name => { const at = given.indexOf(name); return at >= 0 && at % 2 === 0 ? given[at + 1] : undefined; };
         let address = web(told?.contentDocument?.documentURL || '');
         if (!address && named('srcdoc') === undefined && named('src')) { try { address = web(new URL(named('src'), tab.url || undefined).href); } catch { address = ''; } }
-        frames.set(node.nodeId, address);
+        frames.set(node, address);
+        if (told?.frameId) framesOf.set(node, told.frameId);
       }));
+      for (const node of framed.filter(one => framesOf.has(one)).slice(0, FRAMES_READ)) {
+        const held = (await raw(id, 'Accessibility.getFullAXTree', { frameId: framesOf.get(node) }).catch(() => null))?.nodes;
+        if (Array.isArray(held) && held.length) inside.set(node, { byId: new Map(held.map(one => [one.nodeId, one])), root: held.find(one => !one.parentId) || held[0], nodes: held });
+      }
       // The lines of a node and of what it holds.
-      const walk = (node, depth, above) => {
-        const role = node.role?.value || '', name = cut(node.name?.value || '', 160), value = node.value?.value, said = value !== undefined && value !== '', frame = frames.has(node.nodeId);
+      // ids: the tree the node is of (the page's own, or that of a frame).
+      const walk = (node, depth, above, ids = byId) => {
+        const role = node.role?.value || '', name = cut(node.name?.value || '', 160), value = node.value?.value, said = value !== undefined && value !== '', held = inside.get(node);
+        // A frame of the page, or one inside a frame (shown with nothing it holds).
+        const frame = frames.has(node) || (ids !== byId && !node.ignored && FRAMES.has(role));
         // A text that only repeats the name of what holds it says nothing new.
         const shown = !node.ignored && !SILENT.has(role) && !(role === 'StaticText' && (!name || above.includes(name))) && (interactiveOnly !== true || INTERACTIVE.has(role) || frame);
-        const below = (node.childIds || []).flatMap(child => { const next = byId.get(child); return next ? walk(next, shown && interactiveOnly !== true ? depth + 1 : depth, shown && name ? name : above) : []; });
+        const deeper = shown && interactiveOnly !== true ? depth + 1 : depth, below = held ? walk(held.root, frame && shown ? depth + 1 : depth, '', held.byId)
+          : (node.childIds || []).flatMap(child => { const next = ids.get(child); return next ? walk(next, deeper, shown && name ? name : above, ids) : []; });
         // Something that only holds other things, and holds nothing that is shown, is left out.
         if (!shown || (!name && !said && !INTERACTIVE.has(role) && !frame && !below.length)) return below;
         const properties = node.properties || [], states = properties.filter(item => STATES.includes(item.name) && item.value?.value && item.value.value !== 'false').map(item => item.name + (item.value.value === true || item.value.value === 'true' ? '' : '=' + item.value.value));
-        const address = role === 'link' ? properties.find(item => item.name === 'url')?.value?.value : frames.get(node.nodeId) || undefined;
+        const address = role === 'link' ? properties.find(item => item.name === 'url')?.value?.value : frames.get(node) || undefined;
         return ['  '.repeat(Math.min(depth, 12)) + (node.backendDOMNodeId && role !== 'StaticText' ? '[' + node.backendDOMNodeId + '] ' : '') + (role === 'StaticText' ? 'text' : frame ? 'frame' : role) + (name ? ' "' + name + '"' : '') +
-          (said ? ' value="' + cut(value, 120) + '"' : '') + (address ? ' → ' + cut(address, 200) : '') + (states.length ? ' (' + states.join(', ') + ')' : '') + (frame ? ' (another page inside this one: what it holds is not listed here)' : ''), ...below];
+          (said ? ' value="' + cut(value, 120) + '"' : '') + (address ? ' → ' + cut(address, 200) : '') + (states.length ? ' (' + states.join(', ') + ')' : '') + (frame ? held ? ' (another page inside this one: what it holds is listed under it)' : ' (another page inside this one: what it holds is not listed here)' : ''), ...below];
       };
-      const root = part !== undefined ? nodes.find(node => node.backendDOMNodeId === part) : nodes.find(node => !node.parentId) || nodes[0];
+      // The element asked for may be in a frame of the page as well.
+      const trees = [{ byId, nodes }, ...inside.values()], tree = part !== undefined ? trees.find(one => one.nodes.some(node => node.backendDOMNodeId === part)) : trees[0];
+      const root = part !== undefined ? tree?.nodes.find(node => node.backendDOMNodeId === part) : nodes.find(node => !node.parentId) || nodes[0];
       // A page that went elsewhere while it was read has a node by that number that is another element, or none.
       if (part !== undefined && session.page !== listed) throw fail('not_found', 'The page in this tab went elsewhere while it was read. Take a new page.snapshot.');
       if (part !== undefined && !root) throw fail('not_found', 'This element is not in the tree a screen reader sees: it is hidden, only holds its parts in place, or is no longer on the page. page.inspect shows it; a snapshot of what is around it shows its parts.');
-      const all = root ? walk(root, 0, '') : [], kept = wanted === undefined ? all : all.filter(one => one.toLowerCase().includes(wanted.toLowerCase())), given = kept.slice(0, most);
+      const all = root ? walk(root, 0, '', tree?.byId || byId) : [], kept = wanted === undefined ? all : all.filter(one => one.toLowerCase().includes(wanted.toLowerCase())), given = kept.slice(0, most);
       // The refs it gives are taken from now on, on this tab and for this page (see element). A page that went away
       // while it was read gives none.
       if (session.page === listed) {

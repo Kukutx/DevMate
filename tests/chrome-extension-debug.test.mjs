@@ -2433,6 +2433,26 @@ test('where the browser cannot say what is at the point, the tree the element is
     assert.equal(at(field, page), '<x-icon>');
   }
 });
+test('page.snapshot lists what a frame of the same site holds under it, with refs like any other; a frame of another site, or past the first ten, only by its address', async () => {
+  // Frame 3 is drawn by this page's process (the browser names its frame); 4 is of another site (it does not); 5's tree is refused.
+  const told = { 3: { node: { frameId: 'F3', attributes: ['src', '/pay'], contentDocument: { documentURL: 'https://app.example/pay' } } }, 4: { node: { attributes: ['src', 'https://ads.example/'] } }, 5: { node: { frameId: 'F5', attributes: ['src', '/x'] } } };
+  const pay = tree([300, 'RootWebArea', 'Pay', {}, [[301, 'textbox', 'Card holder'], [302, 'button', 'Pay now'], [303, 'Iframe', 'Deeper']]]);
+  const { methods, sent } = harness(shown({ 'DOM.describeNode': ({ backendNodeId }) => told[backendNodeId] ?? no('No node with given id found'),
+    'Accessibility.getFullAXTree': ({ frameId } = {}) => frameId === 'F3' ? pay : frameId === 'F5' ? no('Frame with the given id was not found.') : tree([1, 'RootWebArea', 'Shop', {}, [[2, 'heading', 'Checkout', { level: 1 }], [3, 'Iframe', 'Pay'], [4, 'Iframe', 'Ad'], [5, 'Iframe', 'Gone']]]) }));
+  const NOTE = ' (another page inside this one: what it holds is not listed here)';
+  assert.deepEqual((await methods['page.snapshot']()).text.split('\n'), ['[2] heading "Checkout" (level=1)', '[3] frame "Pay" → https://app.example/pay (another page inside this one: what it holds is listed under it)',
+    '  [301] textbox "Card holder"', '  [302] button "Pay now"', '  [303] frame "Deeper"' + NOTE, '[4] frame "Ad" → https://ads.example/' + NOTE, '[5] frame "Gone" → https://app.example/x' + NOTE]);
+  assert.deepEqual(sent('Accessibility.getFullAXTree').map(given => given.frameId), [undefined, 'F3', 'F5'], 'the trees of the frames the browser named');
+  // A ref inside the frame is a ref like any other, and a snapshot of its part of the page is of that frame's tree.
+  assert.deepEqual(await methods['page.click']({ ref: 302 }), { tabId: 1, clicked: { x: 60, y: 40 } });
+  assert.deepEqual((await methods['page.snapshot']({ ref: 302 })).text, '[302] button "Pay now"');
+  // Of a page of very many frames, what the first ten hold is listed.
+  const many = harness({ 'DOM.describeNode': ({ backendNodeId }) => ({ node: { frameId: 'F' + backendNodeId, attributes: [] } }),
+    'Accessibility.getFullAXTree': ({ frameId } = {}) => frameId ? tree([1000 + Number(frameId.slice(1)), 'RootWebArea', '', {}, [[2000 + Number(frameId.slice(1)), 'button', 'In ' + frameId]]]) : tree([1, 'RootWebArea', '', {}, Array.from({ length: 12 }, (_, at) => [at + 2, 'Iframe', ''])]) });
+  const crowd = (await many.methods['page.snapshot']()).text;
+  assert.equal((crowd.match(/button "In F/g) || []).length, 10); assert.equal(many.sent('Accessibility.getFullAXTree').length, 11);
+});
+
 test('page.snapshot shows a frame of the page with the address of the page inside it, named or not, and says that its inside is not listed', async () => {
   // Seen in a real Chrome: a frame without a name was left out altogether, so a page whose content is in one looked empty.
   const told = { 3: { node: { attributes: ['title', 'Pay', 'src', '/pay/form'], contentDocument: { documentURL: 'https://app.example/pay/form?step=1' } } }, 4: { node: { attributes: ['width', '300', 'src', 'https://ads.example/slot'] } },
