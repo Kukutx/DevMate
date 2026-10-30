@@ -8,6 +8,9 @@ import { DEBUG_READ_ONLY, createDebugger } from './debug.js';
 
 export const READ_ONLY = Object.freeze(['browser.info', 'bookmarks.tree', 'bookmarks.search', 'tabs.list', 'windows.list', 'tabGroups.list',
   'history.search', 'downloads.list', 'sessions.recentlyClosed', 'readingList.list', 'topSites.list', 'page.read', 'page.screenshot', ...DEBUG_READ_ONLY]);
+// What a step of page.run may be: the methods of one tab's page, without its picture, its stored values or the debugger itself.
+export const RUN_STEPS = Object.freeze(['tabs.navigate', 'tabs.back', 'tabs.forward', 'page.read', 'page.snapshot', 'page.inspect', 'page.waitFor', 'page.console', 'page.network',
+  'page.click', 'page.hover', 'page.type', 'page.press', 'page.select', 'page.scroll', 'page.evaluate', 'page.dialog', 'page.reload']);
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const text = (value, name, { optional = false, max = 4096 } = {}) => {
@@ -191,8 +194,12 @@ export function createCapabilities(chrome, { version = '', ownPort = () => undef
       const read = frame?.result || { title: page.title || '', url: page.url || '', text: '' };
       return { tabId: page.id, title: read.title, url: read.url, text: read.text.slice(0, most), ...(read.text.length > most ? { truncated: true, totalChars: read.text.length } : {}), untrusted: true };
     },
-    'page.screenshot': async ({ tabId, fullPage } = {}) => {
+    'page.screenshot': async ({ tabId, fullPage, ref, selector, text: words } = {}) => {
+      // One element (by ref, selector or the text it shows) is pictured through the debugger, wherever the tab is.
+      const part = ref !== undefined || selector !== undefined || words !== undefined ? { ref, selector, text: words } : null;
+      if (part && fullPage === true) throw fail('invalid_input', 'A picture is of the whole page (fullPage) or of one element (ref, selector or text), not both.');
       const page = await target(tabId);
+      if (part) return debug.capture(page.id, { part });
       // The tab in front is captured as it is seen. The whole page, a tab behind another, and a tab in front of a
       // window that is itself put away (the page says so; one that cannot be asked is taken as shown) take the debugger.
       // A page that does not answer within a moment (it is still loading, busy, or showing a dialog) is not waited for:
@@ -210,6 +217,23 @@ export function createCapabilities(chrome, { version = '', ownPort = () => undef
       return { tabId: page.id, mimeType: 'image/png', base64: image.slice(image.indexOf(',') + 1) };
     },
     ...debug.methods
+  };
+  // Several methods of a page one after another on one tab, as one call: what a model would otherwise ask for one at
+  // a time, waiting for each answer. Each step is that method itself, checked as when it is called alone. The run
+  // stops at the first step that fails, and says which one, and how many were not done.
+  methods['page.run'] = async ({ tabId, steps } = {}) => {
+    if (!Array.isArray(steps) || !steps.length || steps.length > 30) throw fail('invalid_input', 'steps is a list of 1 to 30 steps, each { method, input }.');
+    for (const [at, step] of steps.entries()) {
+      if (!step || typeof step !== 'object' || Array.isArray(step) || !RUN_STEPS.includes(step.method)) throw fail('invalid_input', 'Step ' + (at + 1) + ': method is one of ' + RUN_STEPS.join(', ') + '.');
+      if (step.input !== undefined && (step.input === null || typeof step.input !== 'object' || Array.isArray(step.input))) throw fail('invalid_input', 'Step ' + (at + 1) + ': input is an object.');
+      if (step.input?.tabId !== undefined && step.input.tabId !== null) throw fail('invalid_input', 'Step ' + (at + 1) + ': a run works on one tab. Give its tabId once, for the run.');
+    }
+    const page = await target(tabId), done = [];
+    for (const [at, step] of steps.entries()) {
+      done.push({ method: step.method, ...await answer(methods, step.method, { ...step.input, tabId: page.id }) });
+      if (!done.at(-1).ok) return { tabId: page.id, steps: done, failed: at + 1, notDone: steps.length - at - 1, untrusted: true };
+    }
+    return { tabId: page.id, steps: done, untrusted: true };
   };
   return methods;
 }

@@ -10,7 +10,7 @@ import { BROWSER_CAPABILITIES, BROWSER_TEXT, EXTENSION_ORIGIN, NATIVE_HOST, crea
 import { PassThrough } from 'node:stream';
 import { frame, frames, serveChromeHost } from '../runtime/chrome-host.mjs';
 import { createChromeRegistration } from '../runtime/platform/chrome-registration.mjs';
-import { READ_ONLY, createCapabilities } from '../chrome-extension/capabilities.js';
+import { READ_ONLY, RUN_STEPS, createCapabilities } from '../chrome-extension/capabilities.js';
 import { startRuntime } from '../runtime/main.mjs';
 import { main as cli } from '../runtime/cli.mjs';
 
@@ -23,6 +23,7 @@ test('the runtime offers exactly what the extension can do, each as a read or as
   assert.deepEqual(BROWSER_CAPABILITIES.map(item => item.method).sort(), extension);
   assert.deepEqual(BROWSER_CAPABILITIES.filter(item => item.readOnly).map(item => item.method).sort(), [...READ_ONLY].sort());
   assert.ok(BROWSER_CAPABILITIES.every(item => item.name === 'chrome.' + item.method && item.description.length > 8 && item.description.length < 400));
+  assert.deepEqual(BROWSER_CAPABILITIES.find(item => item.method === 'page.run').schema.shape.steps.element.shape.method.options, [...RUN_STEPS], 'a step of a run may be the same methods here and there');
   // The extension is the one of the fixed key in its manifest, and the host is registered for that one alone.
   const manifest = JSON.parse(fs.readFileSync(new URL('../chrome-extension/manifest.json', import.meta.url), 'utf8'));
   assert.equal(EXTENSION_ORIGIN, 'chrome-extension://cbogglgkdnlbglhiljblbnhngmbeiomm/'); assert.ok(manifest.permissions.includes('nativeMessaging')); assert.equal(NATIVE_HOST, 'io.github.kukutx.devmate');
@@ -265,6 +266,11 @@ test('what a developer debugs a page with: answers read as lines, a wait that is
   const elements = link.call({ capability: 'chrome.page.snapshot', input: { interactiveOnly: true } }, { readOnly: true });
   await answering({ tabId: 7, title: 'App', url: 'https://x.test/', text: '[12] button "Save"\n[15] textbox "Name" value="Ann"', nodes: 2, untrusted: true });
   assert.equal((await elements)[BROWSER_TEXT], '[12] button "Save"\n[15] textbox "Name" value="Ann"\n{"tabId":7,"title":"App","url":"https://x.test/","nodes":2,"untrusted":true}');
+  // A run reads as its steps one under the other, each as it reads alone, up to the one that failed.
+  const run = link.call({ capability: 'chrome.page.run', input: { steps: [{ method: 'page.click', input: { ref: 12 } }, { method: 'page.snapshot' }, { method: 'page.press', input: { key: 'Enter' } }] } });
+  await answering({ tabId: 7, steps: [{ method: 'page.click', ok: true, result: { tabId: 7, clicked: { x: 1, y: 2 } } }, { method: 'page.snapshot', ok: true, result: { tabId: 7, text: '[15] textbox "Name"', nodes: 1 } },
+    { method: 'page.press', ok: false, error: { code: 'dialog_open', message: 'The page is showing a dialog.' } }], failed: 3, notDone: 0, untrusted: true });
+  assert.equal((await run)[BROWSER_TEXT], '# 1 page.click\n{"tabId":7,"clicked":{"x":1,"y":2}}\n# 2 page.snapshot\n[15] textbox "Name"\n{"tabId":7,"nodes":1}\n# 3 page.press failed (dialog_open): The page is showing a dialog.\n{"tabId":7,"failed":3,"notDone":0,"untrusted":true}');
   // A picture of a whole page stays a picture, and says how large it is.
   const whole = link.call({ capability: 'chrome.page.screenshot', input: { fullPage: true } }, { readOnly: true });
   await answering({ tabId: 7, mimeType: 'image/png', base64: 'aGk=', fullPage: true, width: 1280, height: 4000 });
@@ -950,5 +956,48 @@ test('once a caller\'s browser was let go to keep the list short, a caller with 
   assert.match(newcomer.message, /^DevMate does not know which browser this caller's ids are from \(no call of this caller's has succeeded since DevMate started, or DevMate let that go to keep its list short\), and chrome\.tabs\.close names/);
   await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true, caller: 'newcomer' });
   assert.deepEqual(await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }, { caller: 'newcomer' }), { by: only });
+  link.close();
+});
+
+test('a run of page methods is held step by step to what each method takes alone, names its tab once, and names ids where a step does', async () => {
+  const link = createBrowserLink({ callTimeoutMs: 2000 }), methods = ['tabs.list', 'page.read', 'page.run'], given = [];
+  const serve = linkId => { void (async () => { for (;;) { let work; try { work = await link.next({ linkId, waitMs: 300 }); } catch { return; }
+    for (const call of work.calls) { given.push(call.params); link.result({ linkId, id: call.id, ok: true, result: { by: linkId } }); } } })(); };
+  const first = link.attach({ browser: 'Google Chrome', extension: '4.0.7', methods }).linkId; serve(first);
+  const run = (steps, options) => link.call({ capability: 'chrome.page.run', input: { tabId: 4, steps } }, options);
+  const steps = [{ method: 'page.waitFor', input: { text: 'Saved', timeoutMs: 500 } }, { method: 'page.click', input: { ref: 13 } }, { method: 'page.press', input: { key: 'Enter' } }];
+  assert.deepEqual(await run(steps), { by: first });
+  assert.deepEqual(given.at(-1), { tabId: 4, steps });
+  // A step without input is passed on with an empty one.
+  await run([{ method: 'page.read' }]);
+  assert.deepEqual(given.at(-1).steps, [{ method: 'page.read', input: {} }]);
+  // Whatever a step's own method would refuse, the run refuses, before the browser hears of it.
+  const count = given.length, refused = async (wrong, message) => {
+    const failure = await run(wrong).then(() => null, error => error);
+    assert.deepEqual([failure?.code, failure?.notStarted], ['invalid_input', true]); assert.match(failure.message, message);
+  };
+  await refused([{ method: 'page.click', input: { tabId: 5, ref: 13 } }], /^Invalid input for chrome\.page\.run: steps\.0\.input: a run works on one tab\. Give its tabId once, for the run\.$/);
+  await refused([{ method: 'page.read' }, { method: 'page.click', input: { ref: 0 } }], /^Invalid input for chrome\.page\.run, step 2 \(page\.click\): ref: /);
+  await refused([{ method: 'page.press', input: { key: 'F13' } }], /, step 1 \(page\.press\): key: /);
+  await refused([{ method: 'page.click', input: { ref: 13, pointer: true } }], /, step 1 \(page\.click\): .*pointer/);
+  for (const wrong of [[{ method: 'page.storage' }], [{ method: 'page.screenshot' }], [{ method: 'page.read', extra: 1 }], [], Array(31).fill({ method: 'page.read' })]) await refused(wrong, /^Invalid input for chrome\.page\.run: steps/);
+  assert.equal(given.length, count);
+  // The steps are checked with the rest of the input: also where no browser is there to ask.
+  const none = createBrowserLink();
+  await assert.rejects(none.call({ capability: 'chrome.page.run', input: { steps: [{ method: 'page.click', input: { ref: 0 } }] } }), { code: 'invalid_input' });
+  none.close();
+  // A run is a change: it is not called as a read.
+  await assert.rejects(run([{ method: 'page.read' }], { readOnly: true }), { code: 'forbidden' });
+  // An id in a step is an id: with two browsers and nothing of this caller's answered, a run that names one is not
+  // passed on, and one that names none is.
+  const second = link.attach({ browser: 'Microsoft Edge', extension: '4.0.7', methods }).linkId; serve(second);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const unsure = await link.call({ capability: 'chrome.page.run', input: { steps: [{ method: 'page.click', input: { ref: 13 } }] } }, { caller: 'new' }).then(() => null, error => error);
+  assert.deepEqual([unsure?.code, unsure?.notStarted], ['browser_changed', true]);
+  assert.deepEqual(await link.call({ capability: 'chrome.page.run', input: { steps: [{ method: 'page.read' }] } }, { caller: 'new' }), { by: second });
+  // A run is given the time of its steps: each at least that of a call, a wait its own, and five minutes in all at most.
+  const definition = BROWSER_CAPABILITIES.find(item => item.name === 'chrome.page.run');
+  assert.equal(definition.waitMs({ steps: [{ method: 'page.waitFor', input: { timeoutMs: 30000 } }, { method: 'page.click' }] }), 70000);
+  assert.equal(definition.waitMs({ steps: Array(30).fill({ method: 'page.waitFor', input: { timeoutMs: 30000 } }) }), 300000);
   link.close();
 });
