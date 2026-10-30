@@ -26,7 +26,9 @@ test('each client is given DevMate in its own settings file, where its documenta
   assert.equal(clientFile('claude-desktop', { platform: 'darwin', home, env }), path.join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'));
   fs.writeFileSync(claude, JSON.stringify({ numStartups: 7, mcpServers: { other: { type: 'stdio', command: 'other' } }, projects: { a: { x: 1 } } }));
   fs.mkdirSync(path.dirname(codex), { recursive: true });
-  fs.writeFileSync(codex, '# my settings\nmodel = "gpt"\n\n[mcp_servers.devmate]\ncommand = "old"\nargs = ["old.mjs"]\n\n[mcp_servers.devmate.env]\nX = "1"\n\n[mcp_servers.other]\ncommand = "other" # mine\n');
+  // (Written with Windows line endings, an older devmate table in the middle, and a comment that belongs to the table after it.)
+  const tomlBefore = '# my settings\nmodel = "gpt"\n\n[mcp_servers.devmate]\ncommand = "old"\nargs = ["old.mjs"]\n\n# the other one, mine\n[mcp_servers.other]\ncommand = "other" # mine\nargs = ["a\n\n\nb"]\n'.replace(/\n/g, '\r\n').replace('a\r\n\r\n\r\nb', 'a\\n\\n\\nb');
+  fs.writeFileSync(codex, tomlBefore);
   const cli = path.join(instance, 'cli.mjs'), node = process.execPath;
   const registration = createClientRegistration({ instanceRoot: instance, cli, node, platform: 'win32', env, home });
   for (const client of CLIENTS) assert.equal(registration.add(client).added, true);
@@ -35,14 +37,13 @@ test('each client is given DevMate in its own settings file, where its documenta
   const claudeSettings = JSON.parse(fs.readFileSync(claude, 'utf8'));
   assert.deepEqual(claudeSettings.mcpServers.devmate, { type: 'stdio', command: node, args: [launcher], env: {} });
   assert.deepEqual([claudeSettings.numStartups, claudeSettings.mcpServers.other, claudeSettings.projects], [7, { type: 'stdio', command: 'other' }, { a: { x: 1 } }]);
-  // Codex: its table, with time for a runtime to start first; the table written before (and its subtable) replaced,
-  // the rest of the file left as it was, comments included.
+  // Codex: its table where the older one stood, with time for a runtime to start and the owner's variables a runtime
+  // needs named to it; every other line of the file as it was, its line endings, and the comment of the next table.
   const toml = fs.readFileSync(codex, 'utf8');
-  assert.match(toml, /^# my settings\nmodel = "gpt"\n/);
-  assert.match(toml, /\[mcp_servers\.other\]\ncommand = "other" # mine/);
-  assert.equal((toml.match(/\[mcp_servers\.devmate/g) || []).length, 1, toml);
-  assert.ok(toml.includes('[mcp_servers.devmate]\ncommand = ' + JSON.stringify(node) + '\nargs = [' + JSON.stringify(launcher) + ']\nstartup_timeout_sec = 60\ntool_timeout_sec = 120\n'), toml);
-  assert.doesNotMatch(toml, /old\.mjs|X = "1"/);
+  const table = '[mcp_servers.devmate]\r\ncommand = ' + JSON.stringify(node) + '\r\nargs = [' + JSON.stringify(launcher) + ']\r\nstartup_timeout_sec = 60\r\ntool_timeout_sec = 120\r\nenv_vars = [';
+  assert.ok(toml.startsWith('# my settings\r\nmodel = "gpt"\r\n\r\n' + table), toml);
+  assert.match(toml, /env_vars = \[[^\]]*"CODEX_HOME"[^\]]*"HTTPS_PROXY"[^\]]*\]\r\n\r\n# the other one, mine\r\n\[mcp_servers\.other\]\r\ncommand = "other" # mine\r\nargs = \["a\\n\\n\\nb"\]\r\n$/);
+  assert.equal((toml.match(/\[mcp_servers\.devmate/g) || []).length, 1, toml); assert.doesNotMatch(toml, /old\.mjs/); assert.doesNotMatch(toml.replace(/\r\n/g, ''), /\n/, 'no line ending of another kind');
   // Claude Desktop: its mcpServers.
   assert.deepEqual(JSON.parse(fs.readFileSync(desktop, 'utf8')).mcpServers.devmate, { command: node, args: [launcher] });
   assert.deepEqual(registration.status().clients.map(item => [item.client, item.registered, item.stale, item.elsewhere]), CLIENTS.map(client => [client, true, undefined, undefined]));
@@ -51,7 +52,7 @@ test('each client is given DevMate in its own settings file, where its documenta
   assert.equal(registration.remove('codex').removed, false, 'nothing to take out twice');
   assert.equal(JSON.parse(fs.readFileSync(claude, 'utf8')).mcpServers.devmate, undefined);
   assert.deepEqual(JSON.parse(fs.readFileSync(claude, 'utf8')).mcpServers.other, { type: 'stdio', command: 'other' });
-  assert.doesNotMatch(fs.readFileSync(codex, 'utf8'), /mcp_servers\.devmate/); assert.match(fs.readFileSync(codex, 'utf8'), /\[mcp_servers\.other\]/);
+  assert.equal(fs.readFileSync(codex, 'utf8'), '# my settings\r\nmodel = "gpt"\r\n\r\n# the other one, mine\r\n[mcp_servers.other]\r\ncommand = "other" # mine\r\nargs = ["a\\n\\n\\nb"]\r\n', 'what is left is the file as it was without devmate');
   assert.deepEqual(registration.status().clients.map(item => item.registered), [false, false, false]);
   assert.throws(() => registration.add('cursor'), { code: 'invalid_input' });
 });
@@ -71,6 +72,53 @@ test('a settings file DevMate cannot read is left as it is, and a registration o
   settings.mcpServers.devmate.command = path.join(home, 'node-that-was-removed.exe');
   fs.writeFileSync(claude, JSON.stringify(settings));
   assert.deepEqual(registration.status().clients[0], { client: 'claude-code', file: claude, registered: true, stale: true });
+});
+
+test('a config.toml DevMate cannot edit safely is left as it is: devmate defined another way, a multi-line string, a value over several lines', t => {
+  const { home, instance, env } = place(t);
+  const codex = clientFile('codex', { home, env }), registration = createClientRegistration({ instanceRoot: instance, cli: path.join(instance, 'cli.mjs'), platform: 'win32', env, home });
+  fs.mkdirSync(path.dirname(codex), { recursive: true });
+  for (const [why, text] of [
+    ['an inline table', '[mcp_servers]\ndevmate = { command = "x" }\n'],
+    ['a dotted key', 'mcp_servers.devmate.command = "x"\n'],
+    ['a quoted header', '[mcp_servers.\'devmate\']\ncommand = "x"\n'],
+    ['a subtable', '[mcp_servers.devmate]\ncommand = "x"\n[mcp_servers.devmate.env]\nX = "1"\n'],
+    ['a multi-line string', 'note = """\n[mcp_servers.devmate]\n"""\n'],
+    ['a multi-line string with no devmate in it', 'note = \'\'\'\n[not.a.table]\n\'\'\'\n'],
+    ['a value over several lines', '[mcp_servers.devmate]\nargs = [\n  "a",\n]\n'],
+    ['two tables', '[mcp_servers.devmate]\ncommand = "x"\n[mcp_servers.devmate]\ncommand = "y"\n']]) {
+    fs.writeFileSync(codex, text);
+    for (const action of ['add', 'remove']) assert.throws(() => registration[action]('codex'), { code: 'invalid_settings' }, why + ': ' + action);
+    assert.equal(fs.readFileSync(codex, 'utf8'), text, why + ': left as it is');
+    assert.match(registration.status().clients[1].problem, /left as it is/, why);
+  }
+});
+
+test('DevMate takes out only what it wrote for this instance, says when it replaced something else, and finds the settings where the client keeps them', t => {
+  const { home, instance, env } = place(t);
+  const claude = clientFile('claude-code', { home, env }), registration = createClientRegistration({ instanceRoot: instance, cli: path.join(instance, 'cli.mjs'), platform: 'win32', env, home });
+  // An entry the owner wrote by hand (as the README shows it), or one of another instance, is not taken out.
+  const hand = { mcpServers: { devmate: { type: 'http', url: 'http://127.0.0.1:8788/mcp' } } };
+  fs.writeFileSync(claude, JSON.stringify(hand));
+  assert.deepEqual(registration.remove('claude-code'), { client: 'claude-code', file: claude, removed: false, elsewhere: true });
+  assert.deepEqual(JSON.parse(fs.readFileSync(claude, 'utf8')), hand);
+  // Added all the same where the owner asks for it, and said so.
+  assert.match(registration.add('claude-code').replaced, /not this DevMate/);
+  // The same launcher written in another case is this instance's on Windows.
+  const settings = JSON.parse(fs.readFileSync(claude, 'utf8'));
+  settings.mcpServers.devmate.args = [settings.mcpServers.devmate.args[0].toUpperCase()]; fs.writeFileSync(claude, JSON.stringify(settings));
+  assert.equal(registration.status().clients[0].registered, true);
+  // Where Claude Code keeps its settings elsewhere (CLAUDE_CONFIG_DIR), and where Claude Desktop is an app package.
+  assert.equal(clientFile('claude-code', { home, env: { CLAUDE_CONFIG_DIR: path.join(home, 'claude-config') } }), path.join(home, 'claude-config', '.claude.json'));
+  const packaged = path.join(home, 'local', 'Packages', 'Claude_pzs8sxrjxfjjc');
+  fs.mkdirSync(packaged, { recursive: true });
+  assert.equal(clientFile('claude-desktop', { platform: 'win32', home, env: { ...env, LOCALAPPDATA: path.join(home, 'local') } }), path.join(packaged, 'LocalCache', 'Roaming', 'Claude', 'claude_desktop_config.json'));
+  // The bridge in the instance directory taken away: said as unable to start, and written again by the next start.
+  fs.rmSync(path.join(instance, 'clients'), { recursive: true });
+  assert.equal(registration.status().clients[0].stale, true);
+  fs.writeFileSync(path.join(instance, 'cli.mjs'), '');
+  assert.equal(registration.refresh().refreshed, true);
+  assert.equal(fs.existsSync(registration.launcher), true); assert.equal(registration.status().clients[0].stale, undefined);
 });
 
 test('what a client starts runs DevMate\'s stdio bridge for this instance with the copy of DevMate a start of the runtime wrote down', t => {
@@ -99,14 +147,18 @@ test('what a client starts runs DevMate\'s stdio bridge for this instance with t
 });
 
 test('devmate client add and remove are the owner\'s at this computer; a connected client may only look', async t => {
-  const { instance } = place(t);
-  const run = async (args, env = {}) => { const stdout = output(), stderr = output(); return { code: await main(['client', ...args, '--instance', instance], { stdout, stderr, env: { ...process.env, ...env } }), stdout: stdout.text, stderr: stderr.text }; };
+  const { home, instance } = place(t);
+  // (A home of its own, as everywhere here: the owner's real settings are not even read. And no mark of a client that
+  // the environment this test runs in may carry.)
+  const own = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== CLIENT_COMMAND_ENV));
+  const run = async (args, env = {}) => { const stdout = output(), stderr = output(); return { code: await main(['client', ...args, '--instance', instance], { stdout, stderr, env: { ...own, HOME: home, USERPROFILE: home, CODEX_HOME: path.join(home, '.codex'), APPDATA: path.join(home, 'roaming'), LOCALAPPDATA: path.join(home, 'local'), ...env } }), stdout: stdout.text, stderr: stderr.text }; };
   for (const args of [['add', 'codex'], ['remove', 'codex']]) {
     const refused = await run(args, { [CLIENT_COMMAND_ENV]: '1' });
     assert.equal(refused.code, 1); assert.match(refused.stderr, /is run by the owner in their own terminal/);
   }
   const looked = await run([], { [CLIENT_COMMAND_ENV]: '1' });
   assert.equal(looked.code, 0, looked.stderr); assert.match(looked.stdout, /claude-desktop/);
+  assert.ok(looked.stdout.includes(JSON.stringify(path.join(home, '.claude.json')).slice(1, -1)), 'the settings of this home, not the owner\'s');
   const unnamed = await run(['add']);
   assert.equal(unnamed.code, 1); assert.match(unnamed.stderr, /Name the client/);
 });

@@ -33,20 +33,30 @@ const LAUNCHER = [
 
 /** The settings file of a client on this computer. */
 export function clientFile(client, { platform = process.platform, env = process.env, home = os.homedir() } = {}) {
-  if (client === 'claude-code') return path.join(home, '.claude.json');
+  // (Claude Code keeps it in CLAUDE_CONFIG_DIR where that is set.)
+  if (client === 'claude-code') return path.join(env.CLAUDE_CONFIG_DIR || home, '.claude.json');
   if (client === 'codex') return path.join(env.CODEX_HOME || path.join(home, '.codex'), 'config.toml');
-  if (client === 'claude-desktop') return platform === 'win32' ? path.join(env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json')
-    : platform === 'darwin' ? path.join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json')
-    : path.join(env.XDG_CONFIG_HOME || path.join(home, '.config'), 'Claude', 'claude_desktop_config.json');
+  if (client === 'claude-desktop') {
+    if (platform !== 'win32') return platform === 'darwin' ? path.join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json')
+      : path.join(env.XDG_CONFIG_HOME || path.join(home, '.config'), 'Claude', 'claude_desktop_config.json');
+    // Claude Desktop installed as an app package reads the copy of its folder that Windows keeps for the package, not
+    // the one in the owner's AppData: that is where it is written.
+    const packages = path.join(env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Packages');
+    let packaged = null;
+    try { packaged = fs.readdirSync(packages).find(name => /^Claude_[a-z0-9]+$/i.test(name)) || null; } catch { /* no packages */ }
+    return packaged ? path.join(packages, packaged, 'LocalCache', 'Roaming', 'Claude', 'claude_desktop_config.json')
+      : path.join(env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
+  }
   throw fault('invalid_input', 'Choose one of: ' + CLIENTS.join(', '));
 }
 
-// Written so that a reader never sees half a file: beside it, then renamed over it.
-function writeWhole(file, text) {
+// Written so that a reader never sees half a file: beside it, then renamed over it (and nothing left beside it where
+// that fails).
+function writeWhole(file, text, mode = 0o600) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = file + '.devmate-' + process.pid;
-  fs.writeFileSync(temporary, text, { mode: 0o600 });
-  fs.renameSync(temporary, file);
+  try { fs.writeFileSync(temporary, text, { mode }); fs.renameSync(temporary, file); }
+  catch (error) { fs.rmSync(temporary, { force: true }); throw error; }
 }
 // A settings file that is there and cannot be read is not written over: it is the owner's, and may hold much more.
 function readJson(file) {
@@ -58,20 +68,36 @@ function readJson(file) {
 }
 const readText = file => { try { return fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return ''; throw error; } };
 
-// config.toml: the table [mcp_servers.devmate] and its subtables, found by their headers. Everything else of the file
-// stays as it was, comments and order included.
-const TABLE = /^\s*\[\s*mcp_servers\s*\.\s*(?:devmate|"devmate")\s*(?:\.[^\]]*)?\]\s*(?:#.*)?$/, OWN = /^\s*\[\s*mcp_servers\s*\.\s*(?:devmate|"devmate")\s*\]\s*(?:#.*)?$/;
-const HEADER = /^\s*\[/;
-function withoutTable(text) {
-  const lines = text.split(/\r?\n/), kept = [];
-  let inside = false;
-  for (const line of lines) {
-    if (HEADER.test(line)) inside = TABLE.test(line);
-    if (!inside) kept.push(line);
+// config.toml is edited without a TOML library, and so only where that is safe: DevMate's own table in the form it
+// writes it, [mcp_servers.devmate] with one `key = value` on each line, and nothing else of the file touched (its
+// comments, its line endings, a comment that belongs to the next table). A file that defines devmate another way, or
+// holds a multi-line string (where a line can look like a table without being one), is left as it is, and said so.
+const HEADER = /^\s*\[\[?\s*[^\]\s][^\]]*\]\]?\s*(?:#.*)?$/;
+const OWN = /^\s*\[\s*mcp_servers\s*\.\s*(?:devmate|"devmate")\s*\]\s*(?:#.*)?$/;
+const OTHER = /^\s*\[\[?\s*mcp_servers\s*\.\s*(?:devmate|"devmate"|'devmate')\s*[.\]]|^\s*mcp_servers\s*\.\s*["']?devmate["']?\s*[.=]/;
+const LINE = /^\s*(?:#.*)?$|^\s*[A-Za-z0-9_-]+\s*=\s*(?:"(?:[^"\\]|\\.)*"|\[(?:\s*"(?:[^"\\]|\\.)*"\s*,?)*\s*\]|-?\d+|true|false)\s*(?:#.*)?$/;
+function codexTable(text, file) {
+  const lines = text.split(/\r?\n/), refuse = why => fault('invalid_settings', file + ' ' + why + '. It was left as it is: change devmate there by hand, or take that out and run the command again.');
+  if (/"""|'''/.test(text)) throw refuse('holds a multi-line string, which DevMate does not edit');
+  let header = null, start = -1, end = lines.length;
+  for (const [at, line] of lines.entries()) {
+    if (HEADER.test(line)) {
+      header = line;
+      if (start >= 0 && end === lines.length) end = at;
+      if (OWN.test(line)) { if (start >= 0) throw refuse('defines [mcp_servers.devmate] twice'); start = at; end = lines.length; }
+      else if (OTHER.test(line)) throw refuse('defines devmate in a form DevMate does not write ([mcp_servers.devmate.…] or a quoted name)');
+    } else if (OTHER.test(line) || (header && /^\s*\[\s*mcp_servers\s*\]/.test(header) && /^\s*["']?devmate["']?\s*=/.test(line))) throw refuse('defines devmate in a form DevMate does not write (a dotted key or an inline table)');
   }
-  return kept.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+  if (start < 0) return { lines, start: -1, end: -1 };
+  // A comment and blank lines right above the next table are that table's.
+  while (end - 1 > start && /^\s*(?:#.*)?$/.test(lines[end - 1])) end--;
+  if (lines.slice(start + 1, end).some(line => !LINE.test(line))) throw refuse('has a devmate table DevMate did not write (a value over several lines)');
+  return { lines, start, end };
 }
 const tomlString = value => JSON.stringify(String(value));
+// What the owner's own environment has that Codex does not hand an MCP server by itself, and that a runtime the bridge
+// starts needs for the commands and agents it starts in turn.
+const CODEX_PASSED = ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'JAVA_HOME', 'GOPATH', 'NVM_HOME', 'NVM_SYMLINK', 'PSModulePath', 'LOCALAPPDATA', 'ProgramData', 'ProgramFiles', 'ComSpec', 'LANG'];
 
 /**
  * The registration of DevMate with the clients on this computer, for one instance. cli is the DevMate command line to
@@ -84,71 +110,86 @@ export function createClientRegistration({ instanceRoot, cli, node = process.exe
   const fileOf = client => clientFile(client, { platform, env, home });
   function writeLauncher() {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    if (readText(launcher) !== LAUNCHER) fs.writeFileSync(launcher, LAUNCHER, { mode: 0o644 });
+    if (readText(launcher) !== LAUNCHER) writeWhole(launcher, LAUNCHER, 0o644);
     const launch = JSON.stringify({ cli, instance }, null, 2) + '\n';
-    if (readText(target) !== launch) fs.writeFileSync(target, launch, { mode: 0o600 });
+    if (readText(target) !== launch) writeWhole(target, launch);
   }
   // What each client has written for DevMate now: the command and its arguments, or null.
   function registered(client) {
     const file = fileOf(client);
     if (client === 'codex') {
-      const text = readText(file), lines = text.split(/\r?\n/);
-      const start = lines.findIndex(line => OWN.test(line));
+      const { lines, start, end } = codexTable(readText(file), file);
       if (start < 0) return null;
-      const body = [];
-      for (const line of lines.slice(start + 1)) { if (HEADER.test(line)) break; body.push(line); }
-      const value = key => { const found = body.map(line => line.match(new RegExp('^\\s*' + key + '\\s*=\\s*(.+?)\\s*(?:#.*)?$'))).find(Boolean); try { return found ? JSON.parse(found[1]) : undefined; } catch { return undefined; } };
+      const value = key => { for (const line of lines.slice(start + 1, end)) { const found = line.match(new RegExp('^\\s*' + key + '\\s*=\\s*("(?:[^"\\\\]|\\\\.)*"|\\[.*\\])\\s*(?:#.*)?$')); if (found) { try { return JSON.parse(found[1]); } catch { return undefined; } } } return undefined; };
       return { command: value('command'), args: value('args') };
     }
     const settings = readJson(file), server = settings.mcpServers?.[NAME];
     return server && typeof server === 'object' ? { command: server.command, args: server.args } : null;
   }
-  // This instance's bridge: what DevMate wrote for this instance. Another instance's is that one's business.
-  const ours = found => !!found && Array.isArray(found.args) && found.args.length === 1 && found.args[0] === launcher;
+  // This instance's bridge: what DevMate wrote for this instance. Another instance's, or one the owner wrote by hand
+  // (an http one), is not DevMate's to take out. (Windows names a file in any case.)
+  const same = (one, other) => { const [a, b] = [one, other].map(file => path.resolve(String(file))); return platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b; };
+  const ours = found => !!found && Array.isArray(found.args) && found.args.length === 1 && typeof found.args[0] === 'string' && same(found.args[0], launcher);
   function status() {
     const clients = CLIENTS.map(client => {
       let found = null, problem = null;
       try { found = registered(client); } catch (error) { problem = error.message; }
-      // stale: it cannot start any more, its Node is gone. (Which Node it is does not matter otherwise: the runtime may
-      // run under another one, an editor's choice.) elsewhere: the name devmate stands for another instance there.
-      return { client, file: fileOf(client), registered: ours(found), ...(ours(found) && !(typeof found.command === 'string' && fs.existsSync(found.command)) ? { stale: true } : {}),
-        ...(found && !ours(found) ? { elsewhere: true } : {}), ...(problem ? { problem } : {}) };
+      // stale: it cannot start DevMate as it is (its Node is gone, or the bridge in the instance directory is: the next
+      // start of the runtime writes that again). elsewhere: the name devmate stands for something else there.
+      const broken = ours(found) && !(typeof found.command === 'string' && fs.existsSync(found.command) && fs.existsSync(launcher) && fs.existsSync(target));
+      return { client, file: fileOf(client), registered: ours(found), ...(broken ? { stale: true } : {}), ...(found && !ours(found) ? { elsewhere: true } : {}), ...(problem ? { problem } : {}) };
     });
     return { clients, launcher, node };
   }
   function add(client) {
     if (!CLIENTS.includes(client)) throw fault('invalid_input', 'Choose one of: ' + CLIENTS.join(', '));
+    const file = fileOf(client), before = registered(client);
     writeLauncher();
-    const file = fileOf(client);
     if (client === 'codex') {
-      const before = withoutTable(readText(file));
+      const text = readText(file), { lines, start, end } = codexTable(text, file), eol = /\r\n/.test(text) ? '\r\n' : '\n';
       // A runtime that is not running is started by the bridge first: the client is given time for that, and for a
-      // call that waits on a command (DevMate's own tools answer within 50 seconds and say how to ask again).
-      const table = ['[mcp_servers.devmate]', 'command = ' + tomlString(node), 'args = [' + tomlString(launcher) + ']', 'startup_timeout_sec = 60', 'tool_timeout_sec = 120'].join('\n');
-      writeWhole(file, (before ? before + '\n\n' : '') + table + '\n');
+      // call that waits on a command (DevMate's own tools answer within 50 seconds and say how to ask again). Codex
+      // hands an MCP server only a few variables of its own; the owner's that a runtime needs are named to it.
+      const table = ['[mcp_servers.devmate]', 'command = ' + tomlString(node), 'args = [' + tomlString(launcher) + ']', 'startup_timeout_sec = 60', 'tool_timeout_sec = 120',
+        'env_vars = [' + CODEX_PASSED.map(tomlString).join(', ') + ']'];
+      const kept = start < 0 ? lines : [...lines.slice(0, start), ...table, ...lines.slice(end)];
+      if (start < 0) { while (kept.length && kept.at(-1) === '') kept.pop(); if (kept.length) kept.push(''); kept.push(...table, ''); }
+      writeWhole(file, kept.join(eol));
     } else {
       const settings = readJson(file);
       settings.mcpServers = { ...(settings.mcpServers && typeof settings.mcpServers === 'object' ? settings.mcpServers : {}),
         [NAME]: client === 'claude-code' ? { type: 'stdio', ...entry(), env: {} } : entry() };
       writeWhole(file, JSON.stringify(settings, null, 2) + '\n');
     }
-    return { client, file, added: true };
+    // (An entry named devmate that was something else is replaced: the owner asked for this one. Said so.)
+    return { client, file, added: true, ...(before && !ours(before) ? { replaced: 'an entry named devmate that was not this DevMate' } : {}) };
   }
   function remove(client) {
     if (!CLIENTS.includes(client)) throw fault('invalid_input', 'Choose one of: ' + CLIENTS.join(', '));
-    const file = fileOf(client);
-    if (!registered(client)) return { client, file, removed: false };
-    if (client === 'codex') writeWhole(file, withoutTable(readText(file)) + '\n');
-    else {
+    const file = fileOf(client), found = registered(client);
+    if (!ours(found)) return { client, file, removed: false, ...(found ? { elsewhere: true } : {}) };
+    if (client === 'codex') {
+      const text = readText(file), { lines, start, end } = codexTable(text, file), eol = /\r\n/.test(text) ? '\r\n' : '\n';
+      const kept = [...lines.slice(0, start), ...lines.slice(end)];
+      // (The blank line that stood between it and what came before goes with it.)
+      if (start > 0 && kept[start - 1] === '' && (kept[start] === '' || kept[start] === undefined)) kept.splice(start - 1, 1);
+      writeWhole(file, kept.join(eol));
+    } else {
       const settings = readJson(file);
       delete settings.mcpServers[NAME];
       writeWhole(file, JSON.stringify(settings, null, 2) + '\n');
     }
     return { client, file, removed: true };
   }
-  /** At a start of the runtime: the bridge the clients start runs this copy of DevMate. Only where a client was added. */
+  /**
+   * At a start of the runtime: the bridge the clients start runs this copy of DevMate. Only where a client was added:
+   * the bridge is there, or a client's settings name it (the instance directory's clients folder was taken away).
+   */
   function refresh() {
-    if (!fs.existsSync(target) || !fs.existsSync(cli)) return { refreshed: false };
+    if (!fs.existsSync(cli)) return { refreshed: false };
+    // (A quick look for the launcher's path in the file first: a settings file of Claude Code can be large.)
+    const named = text => { const needle = JSON.stringify(launcher).slice(1, -1); return platform === 'win32' ? text.toLowerCase().includes(needle.toLowerCase()) : text.includes(needle); };
+    if (!fs.existsSync(target) && !CLIENTS.some(client => { try { return named(readText(fileOf(client))) && ours(registered(client)); } catch { return false; } })) return { refreshed: false };
     writeLauncher();
     return { refreshed: true };
   }

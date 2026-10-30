@@ -464,7 +464,8 @@ export async function main(argv = process.argv.slice(2), {
       // What a client on this computer starts is set at this computer, by its owner.
       if (viaClient && action !== 'status') throw new Error('devmate client ' + action + ' is run by the owner in their own terminal, not through a connected client');
       const { createClientRegistration } = await import('./platform/client-registration.mjs');
-      const registration = createClientRegistration({ instanceRoot, cli: fileURLToPath(import.meta.url), env });
+      // (The home of the environment it was given, as the clients themselves take it.)
+      const registration = createClientRegistration({ instanceRoot, cli: fileURLToPath(import.meta.url), env, home: (process.platform === 'win32' ? env.USERPROFILE : env.HOME) || undefined });
       if (action === 'status') { print(registration.status()); return 0; }
       if (!which) throw new Error('Name the client: devmate client ' + action + ' claude-code | codex | claude-desktop');
       const done = action === 'add' ? registration.add(which) : registration.remove(which);
