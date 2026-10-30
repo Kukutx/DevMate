@@ -347,8 +347,8 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     const names = OWN.some(key => params[key] !== undefined);
     const before = answeredBy(caller);
     if (names && before !== link && (before || links.size > 1 || forgotten)) throw refuse('browser_changed', (before
-      ? 'DevMate uses another browser now than the one that answered before (the owner paused that one or chose another, or a browser came or went), and '
-      : 'DevMate does not know which browser answered this caller (it was started again since, and which browser is used was decided anew, or it let that go to keep its list short), and ') + capability +
+      ? 'The browser DevMate uses now is not the connection that answered this caller before (the owner paused that one or chose another, a browser came or went, or the same browser connected anew, as after its extension was reloaded), and '
+      : 'DevMate does not know which browser this caller\'s ids are from (no call of this caller\'s has succeeded since DevMate started, or DevMate let that go to keep its list short), and ') + capability +
       ' names something by an id (a tab, a window, a bookmark, an element) that belongs to one browser, where the same id is something else in another: it was not passed on. Ask the browser that is used now what it has (tabs.list, bookmarks.tree), then call again.');
     const id = 'call-' + randomUUID();
     const answer = await new Promise((resolve, reject) => {

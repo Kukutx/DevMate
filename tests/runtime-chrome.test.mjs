@@ -865,7 +865,7 @@ test('with several browsers connected and none answered yet, a call that names a
   await new Promise(resolve => setTimeout(resolve, 100));
   const refused = await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }).then(() => null, failure => failure);
   assert.deepEqual([refused?.code, refused?.notStarted], ['browser_changed', true]);
-  assert.match(refused.message, /^DevMate does not know which browser answered this caller/);
+  assert.match(refused.message, /^DevMate does not know which browser this caller's ids are from \(no call of this caller's has succeeded since DevMate started, or DevMate let that go to keep its list short\), and chrome\.tabs\.close names/);
   assert.match(refused.message, /Ask the browser that is used now what it has \(tabs\.list, bookmarks\.tree\), then call again\.$/);
   // A look that names nothing is answered, and from then on the ids are those of the browser that answered it.
   const answeredBy = (await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true })).by;
@@ -924,7 +924,7 @@ test('the browser whose ids a caller holds is kept for each caller: another clie
   // X's call with a tab id of B's is not passed on to A, whatever Y did; Y's is.
   const refused = await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }, { caller: 'X' }).then(() => null, failure => failure);
   assert.deepEqual([refused?.code, refused?.notStarted], ['browser_changed', true]);
-  assert.match(refused.message, /^DevMate uses another browser now than the one that answered before/);
+  assert.match(refused.message, /^The browser DevMate uses now is not the connection that answered this caller before \(the owner paused that one or chose another, a browser came or went, or the same browser connected anew, as after its extension was reloaded\), and chrome\.tabs\.close names/);
   assert.deepEqual(await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }, { caller: 'Y' }), { by: a });
   link.close();
 });
@@ -940,9 +940,15 @@ test('once a caller\'s browser was let go to keep the list short, a caller with 
   // 'first' was let go: its ids may be another browser's from before, so they are not passed on until it looks.
   const refused = await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }, { caller: 'first' }).then(() => null, failure => failure);
   assert.deepEqual([refused?.code, refused?.notStarted], ['browser_changed', true]);
-  assert.match(refused.message, /^DevMate does not know which browser answered this caller \(it was started again since, and which browser is used was decided anew, or it let that go to keep its list short\)/);
+  assert.match(refused.message, /^DevMate does not know which browser this caller's ids are from \(no call of this caller's has succeeded since DevMate started, or DevMate let that go to keep its list short\), and chrome\.tabs\.close names/);
   assert.doesNotMatch(refused.message, /Several browsers/, 'one browser is connected');
   await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true, caller: 'first' });
   assert.deepEqual(await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }, { caller: 'first' }), { by: only });
+  // A caller that comes only now may be one that was let go: it too looks first, and is told the same.
+  const newcomer = await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }, { caller: 'newcomer' }).then(() => null, failure => failure);
+  assert.deepEqual([newcomer?.code, newcomer?.notStarted], ['browser_changed', true]);
+  assert.match(newcomer.message, /^DevMate does not know which browser this caller's ids are from \(no call of this caller's has succeeded since DevMate started, or DevMate let that go to keep its list short\), and chrome\.tabs\.close names/);
+  await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true, caller: 'newcomer' });
+  assert.deepEqual(await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }, { caller: 'newcomer' }), { by: only });
   link.close();
 });
