@@ -109,12 +109,17 @@ test('the doctor names what works, what is missing and the exact next step', asy
   assert.deepEqual([find(stuck, 'connection.public').status, find(stuck, 'connection.public').fix], ['fail', 'devmate restart opens the forward to the relay again. What OpenSSH said last: debug1: Connecting to 203.0.113.7 Warning: remote port forwarding failed for listen port 18443']);
   relayed.service.connection = { status: () => ({ kind: 'ssh', phase: 'connected' }) }; relayed.service.verification = null;
   assert.equal(find(await relayed.service.call('runtime.doctor', {}, owner), 'connection.public').fix, 'devmate restart opens the forward to the relay again.');
-  assert.equal(healthy.status, 'warn', 'a verified but unauthenticated public URL is still a warning');
+  // A verified but unauthenticated public URL is still a warning, and nothing else about it fails. (What this computer
+  // has installed is not looked at here: a Mac without ripgrep fails the line rg, and that says nothing of the route.)
+  const tools = new Set(['rg', 'git']), settled = { ...healthy, checks: healthy.checks.filter(item => !tools.has(item.id)) };
+  assert.deepEqual(settled.checks.filter(item => item.status === 'fail').map(item => item.id), []);
+  assert.equal(find(healthy, 'security').status, 'warn');
+  if (healthy.checks.every(item => !tools.has(item.id) || item.status === 'ok')) assert.equal(healthy.status, 'warn');
   // The CLI prints the same report and fails the command only when something is broken.
   const lines = [];
   const code = await cli(['doctor'], { stdout: { write: text => lines.push(text) }, stderr: { write() {} }, clientFactory: () => ({ call: async () => report }) });
   assert.equal(code, 1); assert.match(lines.join(''), /\[FAIL\] connection\.credential: CLOUDFLARE_TUNNEL_TOKEN is missing\n\s+-> Store it with: devmate secret set CLOUDFLARE_TUNNEL_TOKEN/);
-  assert.equal(await cli(['doctor'], { stdout: { write() {} }, stderr: { write() {} }, clientFactory: () => ({ call: async () => healthy }) }), 0);
+  assert.equal(await cli(['doctor'], { stdout: { write() {} }, stderr: { write() {} }, clientFactory: () => ({ call: async () => ({ ...settled, status: 'warn' }) }) }), 0);
 });
 
 // Where projects are named for a model there is room for a few of them only: the instructions stay under what clients
