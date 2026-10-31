@@ -50,6 +50,15 @@ export function ownedProcess(file, { identify = processIdentity, terminate = pro
       fs.writeFileSync(file, JSON.stringify({ ...about, pid, identity }) + '\n', { mode: 0o600 });
       return true;
     },
+    /** Adds to what is written down of a process, where it is still that process's record: at once, with no asking who it is. */
+    amend(pid, fields) {
+      try {
+        const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (record?.pid !== pid) return false;
+        fs.writeFileSync(file, JSON.stringify({ ...record, ...fields }) + '\n', { mode: 0o600 });
+        return true;
+      } catch { return false; }
+    },
     /** The record of a process that still runs as the one written down, where `fits` takes it; otherwise null. */
     async adopt(fits = () => true) {
       let record;

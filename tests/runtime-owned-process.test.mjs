@@ -63,6 +63,11 @@ test('a connector that is still the one written down, and what it was started fo
   const other = path.join(path.dirname(file), 'other.json');
   assert.equal(await ownedProcess(other).remember(kept.pid, { kind: 'cloudflare-quick' }, () => false), false);
   assert.equal(fs.existsSync(other), false);
+  // What is learned later is added at once, to the record of that process only.
+  assert.equal(ownedProcess(file).amend(kept.pid, { since: '2026-10-31T00:00:00.000Z' }), true);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).since, '2026-10-31T00:00:00.000Z');
+  assert.equal(ownedProcess(file).amend(kept.pid + 1, { since: 'x' }), false);
+  assert.equal(ownedProcess(other).amend(kept.pid, { since: 'x' }), false, 'nothing where nothing is written down');
   // A record whose process is another one now is no connector to take back.
   fs.writeFileSync(file, JSON.stringify({ ...record, identity: 'somebody else|0' }));
   assert.equal(await ownedProcess(file).adopt(), null);

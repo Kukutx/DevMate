@@ -180,11 +180,16 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
   const remembered = async proc => (await owned?.remember(proc.pid, { kind: 'cloudflare-quick', executable: settings.executable, forwardsTo: Number(target.port), keyId, metrics, ...(since ? { since } : {}) }, current(proc)).catch(() => false)) === true;
   // The address a new quick tunnel is given, asked of cloudflared until it has one; written down with the connector.
   async function learn(proc) {
-    for (const end = now() + 60000; child === proc && !assigned && now() < end; await new Promise(resolve => setTimeout(resolve, 500))) {
+    for (const end = now() + 60000; child === proc && !assigned && now() < end;) {
       const hostname = metrics ? await hostnameOf(metrics) : null;
-      if (hostname && child === proc) { assigned = 'https://' + hostname + target.pathname; since = new Date(now()).toISOString(); }
+      if (hostname && child === proc) { assigned = 'https://' + hostname + target.pathname; since = new Date(now()).toISOString(); break; }
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
-    if (current(proc)() && assigned && await remembered(proc) && child === proc) recorded = true;
+    // Since when it has had its address is added to what was written down when it started, at once: asking the system
+    // who the process is again takes seconds, and a restart in those seconds kept a record without it. (Written in
+    // full where nothing was written down at the start.)
+    if (!current(proc)() || !assigned) return;
+    if (recorded ? !owned?.amend?.(proc.pid, { since }) : true) { if (await remembered(proc) && child === proc) recorded = true; }
   }
   function start() {
     return serial(async () => {

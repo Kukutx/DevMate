@@ -187,6 +187,7 @@ function quickFixture() {
   const owned = {
     async remember(pid, about = {}, still = () => true) { if (kept.refused || !still()) return false; kept.record = { ...about, pid, identity: 'cloudflared|' + pid }; return true; },
     async adopt(fits = () => true) { return kept.record && kept.alive && fits(kept.record) ? kept.record : null; },
+    amend(pid, fields) { if (kept.record?.pid !== pid) return false; kept.record = { ...kept.record, ...fields }; kept.amended = (kept.amended || 0) + 1; return true; },
     async reap() { if (kept.record) { kept.reaped++; events.push('reap'); } kept.record = null; return { reaped: true }; },
     forget() { kept.record = null; }
   };
@@ -225,6 +226,9 @@ test('a quick tunnel needs no credential, takes the address it is given, and its
   assert.equal(live.phase, 'connected'); assert.equal(live.edgeConnections, 2); assert.equal(live.publicUrl, 'https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start');
   assert.ok(Date.parse(live.addressSince) > 0);
   await until(() => kept.record?.since, 'the time of the address to be written down');
+  // Added to what was written down at the start, at once (a restart in the seconds a second asking takes kept a record
+  // without it: found with the real cloudflared).
+  assert.equal(kept.amended, 1);
   // cloudflared writes the address a failed request went to into its log, key and all: what is shown of the log
   // (connection.status, the doctor) has the key taken out.
   fs.writeFileSync(path.join(temp, 'quick-tunnel.log'), 'INF started\nERR Request failed error="no answer" dest=https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start?x=1 connIndex=0\n');
