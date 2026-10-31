@@ -260,6 +260,13 @@ async function configureConnection(kind, options, instanceRoot) {
   // beside: the connection there is stays as it is and is not named again (the address of a relay is nothing its owner
   // ever typed); only OpenAI's tunnel beside it is added, changed or taken away.
   const staying = kind === 'beside', stays = staying ? readConfig(instanceRoot) : null;
+  // What names a connection and says nothing for this kind is not passed over in silence: a command that was accepted
+  // would be taken to have done what it said. (Said first: before cloudflared is looked for, say.)
+  const NAMING = ['url', 'host', 'user', 'executable', 'tunnel-id', 'ssh-port', 'identity', 'domain', 'any-address', 'new-address'];
+  const TAKES = { local: [], quick: ['executable', 'new-address'], cloudflare: ['url', 'executable'], 'openai-tunnel': ['tunnel-id', 'executable'], https: ['url'], ssh: ['url', 'executable', 'host', 'user', 'ssh-port', 'identity'], beside: [] };
+  const takes = TAKES[kind] || [], stray = NAMING.filter(name => options[name] !== undefined && !takes.includes(name));
+  if (stray.length && !staying && kind in TAKES) throw new Error('connect ' + kind + ' does not take ' + stray.map(name => '--' + name).join(', ') + (takes.length ? ': of the options that name a connection it takes ' + takes.map(name => '--' + name).join(', ') : ': it takes no option that names a connection') +
+    (stray.some(name => ['domain', 'any-address'].includes(name)) ? '. --domain and --any-address belong to a relay: devmate relay setup <user@host>' : '') + '.');
   const connection = staying ? stays.connection : kind === 'local' ? { kind: 'local' }
     : kind === 'quick' ? { kind: 'cloudflare-quick', executable: cloudflared() }
     : kind === 'cloudflare' ? { kind, publicUrl: need('url'), executable: executable() }
@@ -271,13 +278,6 @@ async function configureConnection(kind, options, instanceRoot) {
       ...(options['ssh-port'] ? { sshPort: Number(options['ssh-port']) } : {}), ...(options.identity ? { identityFile: path.resolve(options.identity) } : {}) }
     : null;
   if (!connection) throw new Error('Choose one of: connect local, quick, cloudflare, openai-tunnel, https, ssh, beside');
-  // What names a connection and says nothing for this kind is not passed over in silence: a command that was accepted
-  // would be taken to have done what it said.
-  const NAMING = ['url', 'host', 'user', 'executable', 'tunnel-id', 'ssh-port', 'identity', 'domain', 'any-address', 'new-address'];
-  const takes = { local: [], quick: ['executable', 'new-address'], cloudflare: ['url', 'executable'], 'openai-tunnel': ['tunnel-id', 'executable'], https: ['url'], ssh: ['url', 'executable', 'host', 'user', 'ssh-port', 'identity'], beside: [] }[kind];
-  const stray = NAMING.filter(name => options[name] !== undefined && !takes.includes(name));
-  if (stray.length && !staying) throw new Error('connect ' + kind + ' does not take ' + stray.map(name => '--' + name).join(', ') + (takes.length ? ': of the options that name a connection it takes ' + takes.map(name => '--' + name).join(', ') : ': it takes no option that names a connection') +
-    (stray.some(name => ['domain', 'any-address'].includes(name)) ? '. --domain and --any-address belong to a relay: devmate relay setup <user@host>' : '') + '.');
   if (options.auth && !['none', 'oauth'].includes(options.auth)) throw new Error('--auth is none or oauth');
   // OpenAI's tunnel beside a connection that has an address. With no such connection the tunnel is the connection.
   const beside = options['openai-tunnel'] === 'none' ? null : options['openai-tunnel'];
