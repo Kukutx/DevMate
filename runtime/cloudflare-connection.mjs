@@ -67,8 +67,9 @@ function tail(file, bytes = 4000) {
   try {
     const size = fs.statSync(file).size, length = Math.min(size, bytes), buffer = Buffer.alloc(length), fd = fs.openSync(file, 'r');
     try { fs.readSync(fd, buffer, 0, length, size - length); } finally { fs.closeSync(fd); }
-    const text = buffer.toString('utf8');
-    return withoutKey(length < size ? text.slice(text.indexOf('\n') + 1) : text);
+    // (A line longer than all of it shows nothing.)
+    const text = buffer.toString('utf8'), at = text.indexOf('\n');
+    return withoutKey(length < size ? (at < 0 ? '' : text.slice(at + 1)) : text);
   } catch { return ''; }
 }
 export function normalizeCloudflareConfig(input) {

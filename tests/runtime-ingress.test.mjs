@@ -242,6 +242,9 @@ test('a quick tunnel needs no credential, takes the address it is given, and its
     const shown = (await connection.status()).diagnostic;
     assert.ok(!shown.includes('start') && !shown.includes('key-of') && shown.length <= 4000, 'with the end ' + shift + ' characters further: ' + shown.slice(0, 80));
   }
+  // One line longer than what is shown, cut inside its key: none of it.
+  fs.writeFileSync(path.join(temp, 'quick-tunnel.log'), 'INF ' + 'x'.repeat(300) + '/mcp/key-of-this-start' + 'y'.repeat(3990));
+  assert.equal((await connection.status()).diagnostic, undefined);
   // A restart (or a runtime that fails) leaves it running, written down; the next runtime takes it back, address and all.
   await connection.stop({ keep: true });
   assert.deepEqual(terminated, []); assert.equal(connection.publicUrl(), null); assert.ok(kept.record);
