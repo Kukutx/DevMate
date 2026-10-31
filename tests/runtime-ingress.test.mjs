@@ -387,14 +387,17 @@ test('the ingress answers a quick tunnel only under the address the tunnel holds
   fs.writeFileSync(path.join(instanceRoot, 'config.json'), JSON.stringify({ connection: { kind: 'cloudflare-quick', executable: process.execPath } }));
   // Claude Code has DevMate among its servers, added with a Node that is gone since: the doctor says so. (Where the
   // clients keep their settings is a folder of this test.)
+  // (On macOS the home holds Claude Desktop's settings and the runtime's socket, whose path may be no longer than 104
+  // bytes: a short folder there.)
   const places = ['APPDATA', 'LOCALAPPDATA', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', ...(process.platform === 'darwin' ? ['HOME'] : [])], before = Object.fromEntries(places.map(name => [name, process.env[name]]));
-  for (const name of places) process.env[name] = temp;
+  const home = process.platform === 'darwin' ? fs.mkdtempSync('/tmp/devmate-home-') : temp;
+  for (const name of places) process.env[name] = name === 'HOME' ? home : temp;
   fs.writeFileSync(path.join(temp, '.claude.json'), JSON.stringify({ mcpServers: { devmate: { command: path.join(temp, 'gone', 'node.exe'), args: [path.join(instanceRoot, 'clients', 'devmate-mcp.mjs')] } } }));
   let address = null, keyPath = null;
   const since = '2026-10-31T00:00:00.000Z';
   const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: ({ localMcpUrl }) => { keyPath = new URL(localMcpUrl).pathname; return { async start() {}, async stop() {}, publicUrl: () => address,
     status() { return { kind: 'cloudflare-quick', phase: address ? 'connected' : 'connecting', ...(address ? { publicUrl: address, addressSince: since, adopted: true } : {}), remoteMcpVerified: false }; } }; } });
-  t.after(async () => { await runtime.stop(); for (const name of places) if (before[name] === undefined) delete process.env[name]; else process.env[name] = before[name]; fs.rmSync(temp, { recursive: true, force: true }); });
+  t.after(async () => { await runtime.stop(); for (const name of places) if (before[name] === undefined) delete process.env[name]; else process.env[name] = before[name]; fs.rmSync(temp, { recursive: true, force: true }); fs.rmSync(home, { recursive: true, force: true }); });
   assert.ok(runtime.ingressPort, 'the ingress listens before the address is known');
   // The host name of a quick tunnel is visible to anyone who watches DNS. What opens the endpoint is the rest of the address.
   assert.match(keyPath, /^\/mcp\/[A-Za-z0-9_-]{32}$/);
