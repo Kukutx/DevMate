@@ -636,6 +636,12 @@ test('the VS Code connection wizard stores the token privately, saves a signed-i
   await commands.get('devMate.runtime.newAddress')();
   assert.deepEqual(commanded, []); assert.match(messages.at(-1), /does not use a Cloudflare quick tunnel/);
   saved = { ...saved, connection: { kind: 'cloudflare-quick', executable: 'C:\\cf\\cloudflared.exe' } };
+  // Declined, nothing happens.
+  const confirm = vscode.window.showWarningMessage; vscode.window.showWarningMessage = async (message, options) => { confirmations.push({ message, ...options }); return undefined; };
+  await commands.get('devMate.runtime.newAddress')();
+  assert.deepEqual([commanded, stops], [[], []]); assert.equal(confirmations.at(-1).modal, true); assert.match(confirmations.at(-1).message, /Give the quick tunnel a new address\?/);
+  assert.match(confirmations.at(-1).detail, /stops working at once/);
+  vscode.window.showWarningMessage = confirm;
   await commands.get('devMate.runtime.newAddress')();
   assert.deepEqual(commanded, [['connect', 'quick', '--new-address']]); assert.deepEqual(stops, [{ again: true }]); assert.match(messages.at(-1), /new address/);
   // The windows of this computer, switched on and the programs named by the owner here (on Windows).

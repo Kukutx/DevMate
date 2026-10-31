@@ -249,6 +249,10 @@ async function configureConnection(kind, options, instanceRoot) {
     (await import('./cloudflare-connection.mjs')).forgetQuickTunnelKey(instanceRoot);
     return { renewed: true, next: ['Apply it: devmate restart (the quick tunnel starts anew: another host name and another key; the old address leads nowhere)', 'Then give your client the new address: devmate mcp-url'] };
   }
+  // A new address is asked for the quick tunnel there is. Asked where there is none, it would have set one up in place
+  // of the connection there is (an OpenAI tunnel, a tunnel on the owner's domain) and dropped its sign-in.
+  if (kind === 'quick' && options['new-address'] && readConfig(instanceRoot).connection.kind !== 'cloudflare-quick')
+    throw new Error('There is no quick tunnel address to renew: this DevMate connects by ' + readConfig(instanceRoot).connection.kind + ', and that stays as it is. To use a quick tunnel instead: devmate connect quick');
   const need = name => { if (!options[name]) throw new Error('connect ' + kind + ' needs --' + name); return options[name]; };
   const executable = () => path.resolve(need('executable'));
   // The quick tunnel needs nothing but cloudflared, which is looked for when it is not named.

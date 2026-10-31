@@ -234,11 +234,13 @@ test('a quick tunnel needs no credential, takes the address it is given, and its
   fs.writeFileSync(path.join(temp, 'quick-tunnel.log'), 'INF started\nERR Request failed error="no answer" dest=https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start?x=1 connIndex=0\n');
   const logged = (await connection.status()).diagnostic;
   assert.match(logged, /dest=https:\/\/calm-river-quick-fixture\.trycloudflare\.com\/mcp\/<key>\?x=1/); assert.ok(!logged.includes('key-of-this-start'));
-  // Also where what is shown of the log begins inside "/mcp/" (cut first, the key was left whole there).
-  for (const into of [1, 2, 3, 4, 5]) {
-    const address = '/mcp/key-of-this-start\n';
-    fs.writeFileSync(path.join(temp, 'quick-tunnel.log'), 'x'.repeat(5000) + address + 'y'.repeat(4000 - (address.length - into)));
-    assert.ok(!(await connection.status()).diagnostic.includes('key-of-this-start'), 'cut ' + into + ' characters into the address');
+  // Also where what is shown of the log begins inside an address, or inside its key, and with many lines that carry it
+  // (each one taken out shortens the text): nothing of the key is shown, wherever the end of the log falls.
+  const failed = 'ERR Request failed error="no answer" dest=https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start connIndex=0\n';
+  for (let shift = 0; shift < 128; shift++) {
+    fs.writeFileSync(path.join(temp, 'quick-tunnel.log'), 'INF started\n' + failed.repeat(90) + 'z'.repeat(shift) + '\n');
+    const shown = (await connection.status()).diagnostic;
+    assert.ok(!shown.includes('start') && !shown.includes('key-of') && shown.length <= 4000, 'with the end ' + shift + ' characters further: ' + shown.slice(0, 80));
   }
   // A restart (or a runtime that fails) leaves it running, written down; the next runtime takes it back, address and all.
   await connection.stop({ keep: true });
@@ -370,6 +372,10 @@ test('a quick tunnel that does not answer at all for the time allowed is stuck, 
   const before = [spawned.length, events.length];
   await assert.rejects(createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl, fetchImpl, owned: asked, pickPort: async () => 47011 }).start(), { code: 'identity_unknown' });
   assert.deepEqual([spawned.length, events.length], before); assert.equal(kept.record.pid, 77);
+  // Nor does a stop say it ended a tunnel it could not end: it says so, as it does for one it had taken back.
+  await assert.rejects(createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl, fetchImpl, owned: asked, pickPort: async () => 47011 }).stop(),
+    { code: 'shutdown_unconfirmed', message: /was not ended: The system could not say/ });
+  assert.equal(kept.record.pid, 77);
 });
 
 test('the ingress answers a quick tunnel only under the address the tunnel holds right now', async t => {
@@ -378,7 +384,7 @@ test('the ingress answers a quick tunnel only under the address the tunnel holds
   fs.writeFileSync(path.join(instanceRoot, 'config.json'), JSON.stringify({ connection: { kind: 'cloudflare-quick', executable: process.execPath } }));
   // Claude Code has DevMate among its servers, added with a Node that is gone since: the doctor says so. (Where the
   // clients keep their settings is a folder of this test.)
-  const places = ['APPDATA', 'LOCALAPPDATA', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME'], before = Object.fromEntries(places.map(name => [name, process.env[name]]));
+  const places = ['APPDATA', 'LOCALAPPDATA', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', ...(process.platform === 'darwin' ? ['HOME'] : [])], before = Object.fromEntries(places.map(name => [name, process.env[name]]));
   for (const name of places) process.env[name] = temp;
   fs.writeFileSync(path.join(temp, '.claude.json'), JSON.stringify({ mcpServers: { devmate: { command: path.join(temp, 'gone', 'node.exe'), args: [path.join(instanceRoot, 'clients', 'devmate-mcp.mjs')] } } }));
   let address = null, keyPath = null;

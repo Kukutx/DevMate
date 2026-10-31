@@ -93,6 +93,11 @@ test('a record whose process id now belongs to something else ends nothing', asy
   await assert.rejects(ownedProcess(file, unknown).reap(), { code: 'identity_unknown' });
   await assert.rejects(ownedProcess(file, unknown).adopt(), { code: 'identity_unknown' });
   assert.equal(fs.existsSync(file), true); assert.equal(processTree.pidRunning(stranger.pid), true);
+  // So too where the system said who it is, and then, asked again just before it is ended, could not.
+  let asked = 0;
+  const once = { identify: async () => { if (asked++ === 0) return 'x|1'; throw Object.assign(new Error('not known'), { code: 'identity_unknown' }); } };
+  await assert.rejects(ownedProcess(file, once).reap(), { code: 'identity_unknown' });
+  assert.equal(fs.existsSync(file), true); assert.equal(processTree.pidRunning(stranger.pid), true);
   // Forgetting a process forgets only its own record: the next runtime may have written down another one meanwhile.
   ownedProcess(file).forget(stranger.pid + 1); assert.equal(fs.existsSync(file), true);
   ownedProcess(file).forget(stranger.pid); assert.equal(fs.existsSync(file), false);

@@ -95,7 +95,10 @@ export function ownedProcess(file, { identify = processIdentity, terminate = pro
       const same = async () => typeof record.identity === 'string' && await identify(record.pid) === record.identity;
       let reaped = false;
       if (await same()) {
-        const result = await terminate(record.pid, { verifyIdentity: same });
+        // (Asked again just before it is ended: where the system cannot say then, that is not knowing either.)
+        let unknown = null;
+        const result = await terminate(record.pid, { verifyIdentity: () => same().catch(error => { unknown = error; throw error; }) });
+        if (!result.exitConfirmed && unknown) throw unknown;
         if (!result.exitConfirmed) throw Object.assign(new Error('A connector left by an earlier runtime (process ' + record.pid + ') could not be stopped.'), { code: 'orphan_connector' });
         reaped = true;
       }

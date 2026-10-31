@@ -29,8 +29,9 @@ const QUICK_RECORD = 'quick-tunnel.json', QUICK_LOG = 'quick-tunnel.log', LOG_KE
 // before it is taken for lost and started again (after a long time offline Cloudflare may have given its address up
 // while the process lives). Only time this runtime was awake to look counts: a computer that slept gets the tunnel's
 // own reconnecting first. ADOPT_MS: how long a tunnel kept from before is given to say its address when it is taken
-// back (at a restart the computer is busy).
-const LOOK_MS = 15000, LOST_MS = 10 * 60000, ADOPT_MS = 15000;
+// back (at a restart the computer is busy; and the runtime says it is ready only after that, within the 20 seconds a
+// start is waited for, so it stays well short of them).
+const LOOK_MS = 15000, LOST_MS = 10 * 60000, ADOPT_MS = 5000;
 
 /** The quick tunnel a runtime of this instance left running, as it was written down; null where there is none. */
 export function keptQuickTunnel(instanceRoot) {
@@ -61,12 +62,13 @@ const freePort = () => new Promise((resolve, reject) => {
 // went to into its log where one failed, the key of the address with it: that is taken out as it is read, so that
 // nothing that shows the log (the doctor, connection.status) shows the key.
 export const withoutKey = text => String(text).replace(/\/mcp\/[^\s"'/?#&<>]+/g, '/mcp/<key>');
-// (Taken out before the end is cut off: cut first, an address whose "/mcp/" fell just before the cut kept its key.)
+// (Whole lines only: a line cut off at its start may begin inside a key, with no "/mcp/" before it to be known by.)
 function tail(file, bytes = 4000) {
   try {
-    const size = fs.statSync(file).size, length = Math.min(size, bytes + 256), buffer = Buffer.alloc(length), fd = fs.openSync(file, 'r');
+    const size = fs.statSync(file).size, length = Math.min(size, bytes), buffer = Buffer.alloc(length), fd = fs.openSync(file, 'r');
     try { fs.readSync(fd, buffer, 0, length, size - length); } finally { fs.closeSync(fd); }
-    return withoutKey(buffer.toString('utf8')).slice(-bytes);
+    const text = buffer.toString('utf8');
+    return withoutKey(length < size ? text.slice(text.indexOf('\n') + 1) : text);
   } catch { return ''; }
 }
 export function normalizeCloudflareConfig(input) {
@@ -324,8 +326,11 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
     return serial(async () => {
       clearInterval(lookTimer);
       // (A quick tunnel written down for this instance and not running here, kept for a start that did not come, is
-      // ended by a stop all the same: a stop is a stop. Where it could not be, that is said.)
-      if (!child) { if (quick && !keep) await owned?.reap().catch(error => { lastError = { code: error.code || 'orphan_connector', message: error.message }; }); phase = 'stopped'; return snapshot(); }
+      // ended by a stop all the same: a stop is a stop. Where it could not be, the stop says so, as for one taken back.)
+      if (!child) {
+        if (quick && !keep) try { await owned?.reap(); } catch (error) { throw fault('shutdown_unconfirmed', 'The quick tunnel written down for this instance was not ended: ' + error.message); }
+        phase = 'stopped'; return snapshot();
+      }
       // Kept only where it is written down: one that is not, nobody could find again to end.
       if (quick && keep && recorded) { child = null; recorded = false; phase = 'stopped'; connections = 0; metrics = null; assigned = null; since = null; return snapshot(); }
       phase = 'stopping';

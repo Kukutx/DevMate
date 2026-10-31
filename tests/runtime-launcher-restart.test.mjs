@@ -15,7 +15,8 @@ import processTree from '../runtime/platform/process-tree.js';
 // The runtimes started here look at the clients' settings (whether DevMate was added to them): those of whoever runs
 // the tests are not read. Where Claude Code, Codex and Claude Desktop keep them is a folder of these tests.
 const clientHome = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-client-home-'));
-for (const name of ['APPDATA', 'LOCALAPPDATA', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME']) process.env[name] = clientHome;
+// (On macOS Claude Desktop's settings are under the home folder itself.)
+for (const name of ['APPDATA', 'LOCALAPPDATA', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', ...(process.platform === 'darwin' ? ['HOME'] : [])]) process.env[name] = clientHome;
 process.on('exit', () => fs.rmSync(clientHome, { recursive: true, force: true }));
 async function freePort() {
   const server = net.createServer();

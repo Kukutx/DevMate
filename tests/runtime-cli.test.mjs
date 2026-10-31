@@ -115,6 +115,11 @@ test('devmate connect quick --new-address takes the key of the address away, and
   const { quickTunnelKey }=await import('../runtime/cloudflare-connection.mjs');
   const key=quickTunnelKey(instance),file=path.join(instance,'quick-tunnel.key');
   const run=async(...args)=>{const stdout=output(),stderr=output();return{code:await main(['connect',...args,'--executable',process.execPath,'--instance',instance],{stdout,stderr}),stdout:stdout.text,stderr:stderr.text};};
+  // Where DevMate connects another way there is no quick tunnel address to renew: the connection there is stays (it
+  // was replaced by a quick tunnel without sign-in).
+  const none=await run('quick','--new-address');
+  assert.equal(none.code,1);assert.match(none.stderr,/There is no quick tunnel address to renew: this DevMate connects by local/);
+  assert.equal(fs.existsSync(path.join(instance,'config.json')),false);
   assert.equal((await run('quick')).code,0);
   assert.equal(quickTunnelKey(instance),key,'the key stays where no new address is asked for');
   const renewed=await run('quick','--new-address');
