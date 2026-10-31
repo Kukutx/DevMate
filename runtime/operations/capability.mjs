@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { z } from 'zod';
 import { DomainError } from '../store.mjs';
 import { BROWSER_ENGINE, isBrowserCapability } from '../chrome.mjs';
-import { DESKTOP_ENGINE, SWITCH_ON, isDesktopCapability } from '../desktop.mjs';
+import { DESKTOP_ENGINE, SWITCH_INPUT_ON, SWITCH_ON, isDesktopCapability } from '../desktop.mjs';
 import { resolveProjectPath } from '../workspace.mjs';
 import { hasWords, id, keywords, mutation, ownerCommand, projectScope } from './shared.mjs';
 
@@ -29,7 +29,7 @@ function uploads(service, args) {
 export function defineCapabilityOperations(service, add) {
   const engine = z.string().max(80);
   // The owner's browser belongs to no project: its capabilities (chrome.*) are answered whichever projects are shared,
-  // and when none is. So do the owner's windows (desktop.*), which only read.
+  // and when none is. So do the owner's windows (desktop.*).
   const ofBrowser = args => isBrowserCapability(args.capability), listsBrowser = args => args.engine === BROWSER_ENGINE || isBrowserCapability(args.name);
   const ofDesktop = args => isDesktopCapability(args.capability), listsDesktop = args => args.engine === DESKTOP_ENGINE || isDesktopCapability(args.name);
   const ofOwner = args => ofBrowser(args) || ofDesktop(args), listsOwner = args => listsBrowser(args) || listsDesktop(args);
@@ -50,14 +50,14 @@ export function defineCapabilityOperations(service, add) {
   add('capability.call', { ...projectScope, capability: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()).default({}), ...mutation }, false,
     'Invoke one capability by the name capability_list gave it, with the input its schema describes (capability_list {name} returns that schema). The result is the capability\'s own. For a capability marked readOnly use capability_query.', (args, context) =>
       ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), caller: browserCaller(context), files: uploads(service, args) })
-        : ofDesktop(args) ? service.desktop.call(args, { signal: service.waitSignal(context) })
+        : ofDesktop(args) ? service.desktop.call(args, { signal: service.waitSignal(context), who: browserCaller(context) })
         : service.capabilities.call(args, { signal: service.waitSignal(context), ownerDecides: service.ownerDecides(context) }),
     { destructive: true, openWorld: true, withoutProject: ofOwner });
   // The same call for what only reads. A client that asks its user before every change has nothing to ask here.
   add('capability.query', { ...projectScope, capability: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()).default({}) }, true,
     'Invoke a read-only capability (readOnly:true in capability_list; also a dryRun capability with its dry run on): status, inspection, search, snapshots. It never changes anything; everything else goes through capability_call.', (args, context) =>
       ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), readOnly: true, caller: browserCaller(context) })
-        : ofDesktop(args) ? service.desktop.call(args, { signal: service.waitSignal(context), readOnly: true })
+        : ofDesktop(args) ? service.desktop.call(args, { signal: service.waitSignal(context), readOnly: true, who: browserCaller(context) })
         : service.capabilities.call(args, { signal: service.waitSignal(context), readOnly: true }),
     { openWorld: true, withoutProject: ofOwner });
   // Without a project these act on the whole runtime, so the project is optional and not filled in.
@@ -67,20 +67,21 @@ export function defineCapabilityOperations(service, add) {
   add('capability.configure', { projectId: id.optional(), engine: engine.min(1), settings: z.record(z.string(), z.unknown()), ...mutation }, false,
     'Change settings of one capability engine for the whole runtime, or with projectId for one project. A null value restores the default; enabled:false switches the engine off. A connected client can only switch an engine off; everything else is set up by the owner on their own computer, or by a connected client when the owner chose the full access profile.',
     (args, context) => {
+      // The owner's windows reach past what is shared: reading them, and the programs acted in, are the owner's to widen at
+      // this computer, in either profile. A connected client may only take away: reading switched off, programs taken out.
+      if (args.engine === DESKTOP_ENGINE) {
+        if (context.surface !== 'local' && !service.desktop.narrows(args.settings))
+          throw new DomainError('forbidden', 'Reading the owner\'s windows, and the programs DevMate may act in, are the owner\'s to widen on their own computer: ' + SWITCH_ON + ', and ' + SWITCH_INPUT_ON + '. A connected client can only switch reading off or take programs out.');
+        const changed = service.desktop.configure(args.settings);
+        service.store.event('capability.desktop.configured', null, { keys: Object.keys(args.settings), scope: 'instance' });
+        return changed;
+      }
       // An engine's settings name programs and folders on this computer. Like what is shared, they are the owner's to widen.
       if (!service.ownerDecides(context) && (Object.keys(args.settings).length !== 1 || args.settings.enabled !== false))
         throw new DomainError('forbidden', 'Capability engines are set up by the owner on their own computer (local workbench or the devmate command). A connected client can only switch one off.');
       // Reading and writing the memory of other processes is switched on at this computer and nowhere else, in either profile.
       if (context.surface !== 'local' && (args.settings.allowProcessAccess || args.settings.allowMemoryWrite))
         throw new DomainError('forbidden', 'Access to the memory of other processes is switched on by the owner on their own computer: ' + ownerCommand('capability.configure', '{"engine":"reverse","settings":{"allowProcessAccess":true}}'));
-      // Reading the owner's windows reaches past what is shared: it is switched on at this computer and nowhere else.
-      if (args.engine === DESKTOP_ENGINE) {
-        if (context.surface !== 'local' && Object.values(args.settings).some(value => value !== false))
-          throw new DomainError('forbidden', 'Reading the owner\'s windows, and acting in them, is switched on by the owner on their own computer: ' + SWITCH_ON + '. A connected client can only switch it off.');
-        const changed = service.desktop.configure(args.settings);
-        service.store.event('capability.desktop.configured', null, { keys: Object.keys(args.settings), scope: 'instance' });
-        return changed;
-      }
       return service.capabilities.configure(args);
     });
 }

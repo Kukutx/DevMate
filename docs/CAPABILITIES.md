@@ -21,7 +21,7 @@ A capability is `<engine>.<name>`.
 | `reverse` | `reverse.*` | the runtime, optionally starting Python, Rizin/radare2 and Ghidra |
 | `obsidian` | `obsidian.*` | the Obsidian plugin of an attached vault |
 | `chrome` | `chrome.*`: the owner's own browser (bookmarks, tabs, windows, history, downloads, the reading list) and `chrome.page.*`, which debugs a page like DevTools | the DevMate extension in Chrome or Edge, through the program the browser starts for it |
-| `desktop` | `desktop.*`: the windows open on the owner's computer, the controls of one, and a picture of a window or of the screen, once the owner has switched it on at the computer (or with full access); `desktop.act` acts on one control where the owner switched acting on too | the runtime, through the Windows PowerShell that comes with Windows (Windows only for now) |
+| `desktop` | `desktop.*`: the windows open on the owner's computer, the controls of one, and a picture of a window or of the screen, once the owner has switched it on at the computer (or with full access); `desktop.act` acts on one control in the programs the owner named | the runtime, through the Windows PowerShell that comes with Windows (Windows only for now) |
 
 Configured external MCP servers are reached as `mcp.<serverId>.<operation>`.
 
