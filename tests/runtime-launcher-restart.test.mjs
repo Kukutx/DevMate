@@ -196,3 +196,32 @@ test('a start that fails, so that no runtime holds the instance, ends a quick tu
   let timer;assert.equal(await Promise.race([ended,new Promise(resolve=>{timer=setTimeout(()=>resolve(false),10000);})]).finally(()=>clearTimeout(timer)),true,'the tunnel was ended');
   assert.equal(fs.existsSync(record),false);
 });
+
+test('a kept quick tunnel no runtime takes back is ended by its keeper; one a runtime holds, or that is no longer the one written down, is left alone',{timeout:90000},async t=>{
+  // A restart whose start never came, or a runtime that was killed: nothing else would end it.
+  const { ownedProcess } = await import('../runtime/platform/owned-process.mjs');
+  const { acquireInstanceLock } = await import('../runtime/instance-lock.mjs');
+  const keeperPath=path.resolve('runtime/platform/tunnel-keeper.mjs');
+  const process_=()=>{const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true});t.after(()=>{try{child.kill('SIGKILL');}catch{}});return new Promise((resolve,reject)=>{child.once('spawn',()=>resolve(child));child.once('error',reject);});};
+  const keep=(instanceRoot,pid)=>{const keeper=spawn(process.execPath,[keeperPath,instanceRoot,String(pid),'100','400'],{stdio:'ignore',windowsHide:true});t.after(()=>{try{keeper.kill('SIGKILL');}catch{}});return new Promise(resolve=>keeper.once('exit',code=>resolve(code)));};
+  const within=(promise,ms)=>{let timer;return Promise.race([promise,new Promise(resolve=>{timer=setTimeout(()=>resolve('still waiting'),ms);})]).finally(()=>clearTimeout(timer));};
+  // No runtime holds the instance: after its while, the tunnel is ended and the record goes, and the keeper with it.
+  const base=temp(t),alone=path.join(base,'alone');fs.mkdirSync(alone);
+  const tunnel=await process_(),record=path.join(alone,'quick-tunnel.json');
+  assert.equal(await ownedProcess(record).remember(tunnel.pid,{kind:'cloudflare-quick',forwardsTo:8789}),true);
+  const ended=new Promise(resolve=>tunnel.once('exit',()=>resolve(true))),kept=keep(alone,tunnel.pid);
+  assert.equal(await within(ended,20000),true,'the tunnel was ended');assert.equal(await within(kept,10000),0,'and the keeper went');
+  assert.equal(fs.existsSync(record),false);
+  // A runtime holds the instance: the tunnel is its, and stays.
+  const held=path.join(base,'held');fs.mkdirSync(held);
+  const lock=await acquireInstanceLock(held,{pid:process.pid,generation:'test'});t.after(()=>lock.close());
+  const busy=await process_(),busyRecord=path.join(held,'quick-tunnel.json');
+  assert.equal(await ownedProcess(busyRecord).remember(busy.pid,{kind:'cloudflare-quick',forwardsTo:8789}),true);
+  const watching=keep(held,busy.pid);
+  await new Promise(resolve=>setTimeout(resolve,1500));
+  assert.equal(processTree.pidRunning(busy.pid),true,'a runtime holds it');assert.equal(fs.existsSync(busyRecord),true);
+  // Another tunnel is written down now (a new runtime started its own): the keeper of the old one goes, ending nothing.
+  const other=await process_();
+  assert.equal(await ownedProcess(busyRecord).remember(other.pid,{kind:'cloudflare-quick',forwardsTo:8789}),true);
+  assert.equal(await within(watching,10000),0);assert.equal(processTree.pidRunning(other.pid),true);assert.equal(processTree.pidRunning(busy.pid),true);
+});

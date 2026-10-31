@@ -187,7 +187,8 @@ function codexTable(text, file) {
   }
   return { lines, start, end, values };
 }
-const tomlString = value => JSON.stringify(String(value));
+// (JSON's escapes are TOML's, but for DEL, which TOML wants escaped too.)
+const tomlString = value => JSON.stringify(String(value)).replace(/\x7f/g, '\\u007f');
 // What the owner's own environment has that Codex does not hand an MCP server by itself, and that a runtime the bridge
 // starts keeps for its whole life and serves every client with: what the commands and agents it starts in turn are
 // given (../agents/common.mjs), the account variables of an agent that is to use them, and the credential of a

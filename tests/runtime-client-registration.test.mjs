@@ -233,3 +233,14 @@ test('devmate client add and remove are the owner\'s at this computer; a connect
   const kept = await run(['remove', 'claude-code']);
   assert.equal(kept.code, 0, kept.stderr); assert.match(kept.stdout, /not one this DevMate added/); assert.doesNotMatch(kept.stdout, /was not added/);
 });
+
+test('a path written into config.toml is a TOML string whatever it holds, the DEL character too, and is read back as it was', t => {
+  const { home, instance, env } = place(t), del = String.fromCharCode(127);
+  const node = path.join(home, 'odd "place"', 'a' + del + 'b', 'node.exe');
+  const registration = createClientRegistration({ instanceRoot: instance, cli: path.join(instance, 'cli.mjs'), node, platform: 'win32', env, home });
+  registration.add('codex');
+  const toml = fs.readFileSync(clientFile('codex', { home, env }), 'utf8');
+  assert.ok(!toml.includes(del), 'TOML wants DEL escaped in a basic string');
+  assert.ok(toml.includes('a\\u007fb'), toml);
+  assert.deepEqual(registration.status().clients.find(item => item.client === 'codex').registered, true);
+});

@@ -90,10 +90,12 @@ export async function runtimeStatus({ instanceRoot, clientFactory = createRuntim
 // What an editor injects into its own processes, and what Claude Code (or the app it runs in) puts on what it starts:
 // the marks of its session (an agent started later would take itself for one inside that session, a child of a session
 // that has ended), who is signed in, the socket and token of its messaging (a credential every command a client runs
-// would hold), and how that one session was to behave. What the owner set for Claude Code itself (CLAUDE_CONFIG_DIR, a
-// provider such as CLAUDE_CODE_USE_BEDROCK) stays. Codex's sandbox marks stay too: a runtime started inside that
-// sandbox is in it, and says so.
-const SESSION_MARKS = new RegExp('^(ELECTRON_|VSCODE_|CLAUDE_AGENT_SDK_|CLAUDE_CODE_MESSAGING_|CLAUDE_CODE_EMIT_|CLAUDE_PREVIEW_)|^(CLAUDECODE|CLAUDE_PID|AI_AGENT|HOST_SESSION_ID|CHILD_SESSION|' +
+// would hold), and how that one session was to behave, and the app's crash handler and traces. What the owner set for
+// Claude Code itself (CLAUDE_CONFIG_DIR, a provider such as CLAUDE_CODE_USE_BEDROCK) stays, and so do the owner's own
+// Electron settings (ELECTRON_MIRROR for the projects they build): an editor's are the three that make it run as Node.
+// Codex's sandbox marks stay too: a runtime started inside that sandbox is in it, and says so.
+const SESSION_MARKS = new RegExp('^(VSCODE_|CLAUDE_AGENT_SDK_|CLAUDE_CODE_MESSAGING_|CLAUDE_CODE_EMIT_|CLAUDE_PREVIEW_)|^(ELECTRON_RUN_AS_NODE|ELECTRON_NO_ATTACH_CONSOLE|ELECTRON_NO_ASAR|' +
+  'CHROME_CRASHPAD_PIPE_NAME|BAGGAGE|SENTRY-TRACE|CLAUDECODE|CLAUDE_PID|AI_AGENT|HOST_SESSION_ID|CHILD_SESSION|' +
   'CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|HOST_SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|SDK_HAS_HOST_AUTH_REFRESH|EXECPATH|USER_EMAIL|ACCOUNT_UUID|ORGANIZATION_UUID|OAUTH_SCOPES|' +
   'DESKTOP_APP_VERSION|TERMINAL_MCP_TOOLS|REPORT_FINDINGS|SIMPLE|DISABLE_CRON|EAGER_FLUSH|ENABLE_ASK_USER_QUESTION_TOOL|ENABLE_SDK_FILE_CHECKPOINTING|STARTUP_FAILURE_RESULTS|DISABLE_TERMINAL_TITLE))$', 'i');
 

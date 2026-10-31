@@ -98,6 +98,16 @@ test('a record whose process id now belongs to something else ends nothing', asy
   const once = { identify: async () => { if (asked++ === 0) return 'x|1'; throw Object.assign(new Error('not known'), { code: 'identity_unknown' }); } };
   await assert.rejects(ownedProcess(file, once).reap(), { code: 'identity_unknown' });
   assert.equal(fs.existsSync(file), true); assert.equal(processTree.pidRunning(stranger.pid), true);
+  // A process the system shows but will not say more of (started as administrator) is not known where it runs the
+  // program written down, and is another process where it runs another one.
+  const shown = name => ({ identify: async () => 'denied|' + name });
+  fs.writeFileSync(file, JSON.stringify({ pid: stranger.pid, identity: 'C:\\Program Files\\cloudflared\\cloudflared.exe|1' }));
+  await assert.rejects(ownedProcess(file, shown('cloudflared')).reap(), { code: 'identity_unknown' });
+  await assert.rejects(ownedProcess(file, shown('CloudFlared')).adopt(), { code: 'identity_unknown' });
+  assert.equal(fs.existsSync(file), true);
+  assert.deepEqual(await ownedProcess(file, shown('svchost')).reap(), { reaped: false, pid: stranger.pid });
+  assert.equal(fs.existsSync(file), false); assert.equal(processTree.pidRunning(stranger.pid), true);
+  fs.writeFileSync(file, JSON.stringify({ pid: stranger.pid, identity: 'x|1' }));
   // Forgetting a process forgets only its own record: the next runtime may have written down another one meanwhile.
   ownedProcess(file).forget(stranger.pid + 1); assert.equal(fs.existsSync(file), true);
   ownedProcess(file).forget(stranger.pid); assert.equal(fs.existsSync(file), false);

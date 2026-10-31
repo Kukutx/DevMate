@@ -203,6 +203,11 @@ test('only what DevMate says is put into the names of a surface: a file, command
   assert.ok(running.includes(words), running);
   // The hint after the output is DevMate's, and names the tool of this surface.
   assert.match(running, /\[still running; write_stdin \{id:"/);
+  // A path an error says back is the caller's, whatever names of tools it happens to hold.
+  for (const missing of ['logs/git.log', 'src/shell.run.ts', 'docs/workspace_read.md']) {
+    const refused = await client.callTool({ name: 'workspace_read', arguments: { path: missing } });
+    assert.equal(refused.isError, true); assert.ok(refused.content[0].text.includes(missing), refused.content[0].text);
+  }
 });
 
 test('the tools a GPT model knows work as it expects: read, apply_patch, exec_command, write_stdin', { timeout: 60000 }, async t => {

@@ -10,7 +10,7 @@ import { startRuntime } from '../runtime/main.mjs';
 import { verifyPublicMcp } from '../runtime/connection-verify.mjs';
 import { createConnection, normalizeConnectionConfig } from '../runtime/connection.mjs';
 import { normalizeConfig } from '../runtime/config.mjs';
-import { forgetQuickTunnelKey } from '../runtime/cloudflare-connection.mjs';
+import { forgetQuickTunnelKey, quickTunnelKey } from '../runtime/cloudflare-connection.mjs';
 
 const fakeConnection = kind => () => ({ async start() {}, async stop() {}, status() { return { kind, phase: 'fixture', remoteMcpVerified: false }; } });
 function request(port, pathname, { method = 'GET', headers = {}, body } = {}) {
@@ -176,8 +176,12 @@ function quickFixture() {
   };
   const terminated = [];
   const terminateImpl = async child => { terminated.push(child.pid); child.exitCode = 0; child.emit('exit', 0, null); return { exitConfirmed: true }; };
+  // What it was given, it also says in its log, as the real one does ("Your quick Tunnel has been created!").
   const fetchImpl = async address => {
     if (!cloudflared.answers) throw new Error('connection refused');
+    const args = spawned.at(-1)?.args || [], logfile = args.includes('--logfile') ? args[args.indexOf('--logfile') + 1] : null;
+    if (address.endsWith('/quicktunnel') && cloudflared.given && cloudflared.logs !== false && logfile && !(fs.existsSync(logfile) && fs.readFileSync(logfile, 'utf8').includes(cloudflared.given)))
+      fs.appendFileSync(logfile, 'INF |  https://' + cloudflared.given + '  |\n');
     const body = address.endsWith('/quicktunnel') ? { hostname: cloudflared.given || '' } : { status: cloudflared.ready ? 200 : 503, readyConnections: cloudflared.ready };
     return { ok: !address.endsWith('/ready') || cloudflared.ready > 0, json: async () => body };
   };
@@ -240,7 +244,9 @@ test('a quick tunnel needs no credential, takes the address it is given, and its
   for (let shift = 0; shift < 128; shift++) {
     fs.writeFileSync(path.join(temp, 'quick-tunnel.log'), 'INF started\n' + failed.repeat(90) + 'z'.repeat(shift) + '\n');
     const shown = (await connection.status()).diagnostic;
-    assert.ok(!shown.includes('start') && !shown.includes('key-of') && shown.length <= 4000, 'with the end ' + shift + ' characters further: ' + shown.slice(0, 80));
+    // Every line shown is a whole line of the log, its key taken out: nothing of a line cut at its start.
+    const whole = failed.replace('key-of-this-start', '<key>').trimEnd();
+    assert.ok(shown.length <= 4000 && shown.split('\n').every(line => line === whole || /^z*$/.test(line)), 'with the end ' + shift + ' characters further: ' + shown.slice(0, 80));
   }
   // One line longer than what is shown, cut inside its key: none of it.
   fs.writeFileSync(path.join(temp, 'quick-tunnel.log'), 'INF ' + 'x'.repeat(300) + '/mcp/key-of-this-start' + 'y'.repeat(3990));
@@ -381,6 +387,35 @@ test('a quick tunnel that does not answer at all for the time allowed is stuck, 
   assert.equal(kept.record.pid, 77);
 });
 
+test('a host name is taken only where cloudflared itself said it was given it, and a tunnel is taken back only under the host name written down', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-host-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const config = { kind: 'cloudflare-quick', executable: process.execPath };
+  const { spawned, cloudflared, spawnImpl, terminateImpl, fetchImpl, kept, owned } = quickFixture();
+  const watched = [], keeper = pid => watched.push(pid);
+  const connect = (more = {}) => createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl, fetchImpl, owned, pickPort: async () => 47011, adoptMs: 300, keeper, ...more });
+  // A program that took the metrics port first answers with a host name of its own: cloudflared said nothing of it.
+  cloudflared.given = 'not-the-tunnels.trycloudflare.com'; cloudflared.ready = 1; cloudflared.logs = false;
+  const first = connect(); await first.start();
+  // Written down, it is watched by a keeper of its own from the start (./platform/tunnel-keeper.mjs).
+  assert.deepEqual(watched, [spawned[0].child.pid]);
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  assert.equal(first.publicUrl(), null, 'no address, so no key is sent anywhere');
+  // What cloudflared says in its own log is taken, and written down with the tunnel (the key is not).
+  cloudflared.given = 'calm-host-fixture.trycloudflare.com'; cloudflared.logs = true;
+  await until(() => first.publicUrl(), 'the address', 5000); await until(() => kept.record?.hostname, 'the host name written down');
+  assert.equal(kept.record.hostname, 'calm-host-fixture.trycloudflare.com'); assert.ok(!JSON.stringify(kept.record).includes('key-of-this-start'));
+  await first.stop({ keep: true });
+  // Taken back where it answers with that host name; not where something else answers there.
+  cloudflared.given = 'someone-elses.trycloudflare.com';
+  const other = connect(); await other.start();
+  assert.notEqual(other.publicUrl(), 'https://someone-elses.trycloudflare.com/mcp/key-of-this-start'); assert.equal(spawned.length, 2, 'a new tunnel instead');
+  await other.stop();
+  // The key is made anew only where there is none: one that cannot be read this moment is an error, not a new address.
+  const keyless = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-keyfile-')); t.after(() => fs.rmSync(keyless, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(keyless, 'quick-tunnel.key'));
+  assert.throws(() => quickTunnelKey(keyless), { code: 'EISDIR' });
+});
 test('the ingress answers a quick tunnel only under the address the tunnel holds right now', async t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-ingress-'));
   const instanceRoot = path.join(temp, 'instance'); fs.mkdirSync(instanceRoot);

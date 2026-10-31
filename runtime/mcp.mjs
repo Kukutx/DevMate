@@ -55,11 +55,13 @@ const MODEL_TOOLS = Object.freeze({
 });
 export const MODEL_VISIBLE_OPERATIONS = new Set(Object.keys(MODEL_TOOLS));
 // Operations are named with dots, the tools a model sees with underscores. What is written for the model about
-// those tools names what it can actually call.
-const TOOL_NAME = new RegExp('\\b(' + Object.keys(MODEL_TOOLS).map(name => name.replace('.', '\\.')).join('|') + ')\\b(?!_)', 'g');
+// those tools names what it can actually call. (A name inside a path or a file name, as an error says one back, such
+// as logs/git.log or shell.run.ts, is no tool and stays as it is.)
+const OUTSIDE_PATH = ['(?<![\\w./\\\\-])', '(?![\\w-]|\\.\\w)'];
+const TOOL_NAME = new RegExp(OUTSIDE_PATH[0] + '(' + Object.keys(MODEL_TOOLS).map(name => name.replace('.', '\\.')).join('|') + ')' + OUTSIDE_PATH[1], 'g');
 export const toolSpelling = text => text.replace(TOOL_NAME, name => name.replace('.', '_'));
 // The same names as they are written for a model, to be put into the words of one surface.
-const WRITTEN = new RegExp('\\b(' + Object.keys(MODEL_TOOLS).map(name => name.replace('.', '_')).join('|') + ')\\b', 'g');
+const WRITTEN = new RegExp(OUTSIDE_PATH[0] + '(' + Object.keys(MODEL_TOOLS).map(name => name.replace('.', '_')).join('|') + ')' + OUTSIDE_PATH[1], 'g');
 export const surfaceSpelling = (text, shown) => respell(toolSpelling(text), shown, WRITTEN);
 
 // Clients cut server instructions short: some read only the first 512
