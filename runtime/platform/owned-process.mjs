@@ -58,7 +58,7 @@ export function ownedProcess(file, { identify = processIdentity, terminate = pro
     if (typeof record?.identity !== 'string') return false;
     const now = await identify(record.pid);
     if (typeof now === 'string' && now.startsWith('denied|')) {
-      const program = path.basename(record.identity.slice(0, record.identity.lastIndexOf('|'))).replace(/\.exe$/i, '').toLowerCase();
+      const program = path.win32.basename(record.identity.slice(0, record.identity.lastIndexOf('|'))).replace(/\.exe$/i, '').toLowerCase();
       if (now.slice(7).toLowerCase() === program) throw unknown(record.pid, 'it runs as another user, or as administrator');
       return false;
     }
