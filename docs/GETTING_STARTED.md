@@ -154,7 +154,7 @@ Run `devmate doctor` first. It checks one thing after another and says under eac
 
 | What you see | What to do |
 | --- | --- |
-| ChatGPT reports an error when connecting, or lists no tools | See whether `connection.public` is `[ ok ]` in `devmate doctor`. If not, the address does not reach you: wait some seconds and try again, or run `devmate restart` and copy the address anew |
+| ChatGPT reports an error when connecting, or lists no tools | See whether `connection.public` is `[ ok ]` in `devmate doctor`. If not, the address does not reach you: wait some seconds and try again. If it stays so, ask for a new address: `devmate connect quick --new-address`, then `devmate restart`, and give ChatGPT the new one (`devmate mcp-url`) |
 | It worked yesterday and ChatGPT cannot connect today | A quick tunnel, and the computer was restarted or DevMate stopped since: the address is another (`devmate doctor` says since when it has stayed the same). Do step 4 again |
 | ChatGPT can read and not change | Your plan allows custom connectors to read only, or the project is shared read-only: `devmate project list` shows `access` |
 | The model says a folder is "shared by the owner on their own computer" | Share it yourself: open it in an editor that has DevMate, or run `devmate project add <folder>` |

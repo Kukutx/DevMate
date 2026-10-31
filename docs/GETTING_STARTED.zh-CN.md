@@ -154,7 +154,7 @@ ChatGPT 可以把一整件任务交给你电脑上装的 Codex 或 Claude Code�
 
 | 你看到的 | 怎么办 |
 | --- | --- |
-| ChatGPT 连接时报错，或工具列表是空的 | `devmate doctor` 看 `connection.public` 是不是 `[ ok ]`。不是的话地址没通：等十几秒再试，或 `devmate restart` 后重新复制地址 |
+| ChatGPT 连接时报错，或工具列表是空的 | `devmate doctor` 看 `connection.public` 是不是 `[ ok ]`。不是的话地址没通：等十几秒再试。一直不通就换个新地址：`devmate connect quick --new-address`，再 `devmate restart`，把新地址（`devmate mcp-url`）给 ChatGPT |
 | 昨天还好好的，今天 ChatGPT 说连不上 | 用的是快速隧道，电脑重启过或 DevMate 停止过，地址变了（`devmate doctor` 会说地址从什么时候起没变过）。重做第 4 步 |
 | ChatGPT 能读不能改 | 你的套餐对自定义连接器只允许读，或者项目是只读共享的。`devmate project list` 看 `access` |
 | 模型说文件夹要“由所有者在自己的电脑上共享” | 你来共享：在装了 DevMate 的编辑器里打开它，或 `devmate project add <文件夹>` |

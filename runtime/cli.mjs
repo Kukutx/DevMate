@@ -60,7 +60,8 @@ Connecting an AI client
   devmate connect quick [--new-address]
                                     a Cloudflare quick tunnel: no account, no domain, nothing to set up;
                                     the address stays across restarts of DevMate and changes after
-                                    devmate stop, a restart of the computer, or --new-address
+                                    devmate stop, a restart of the computer, or --new-address and
+                                    then devmate restart
   devmate connect cloudflare --url https://<host>/mcp --executable <cloudflared> [--auth oauth]
   devmate connect openai-tunnel --tunnel-id <tunnel_…> [--organization <org-…>]
                                     OpenAI's own tunnel, for ChatGPT: outbound only, no public address, an id
@@ -243,7 +244,8 @@ async function configureConnection(kind, options, instanceRoot) {
   const { readConfig, saveConfig, publicMcpUrl } = await import('./config.mjs');
   // A new address for the quick tunnel there is, and nothing else: the connection stays as it is saved (the cloudflared
   // it names, OpenAI's tunnel beside it). Only its key goes, and with it the tunnel kept for that key.
-  if (kind === 'quick' && options['new-address'] && readConfig(instanceRoot).connection.kind === 'cloudflare-quick' && ['executable', 'openai-tunnel', 'organization', 'auth'].every(name => options[name] === undefined)) {
+  if (kind === 'quick' && options['new-address'] && readConfig(instanceRoot).connection.kind === 'cloudflare-quick' &&
+    ['executable', 'openai-tunnel', 'organization', 'auth', 'url', 'host', 'user', 'tunnel-id', 'ssh-port', 'identity', 'domain', 'any-address'].every(name => options[name] === undefined)) {
     (await import('./cloudflare-connection.mjs')).forgetQuickTunnelKey(instanceRoot);
     return { renewed: true, next: ['Apply it: devmate restart (the quick tunnel starts anew: another host name and another key; the old address leads nowhere)', 'Then give your client the new address: devmate mcp-url'] };
   }
@@ -342,7 +344,7 @@ async function configureConnection(kind, options, instanceRoot) {
     'If it was set up with --any-address, add that: without it the relay answers only ChatGPT, Claude and this computer.', 'To take the relay off that server:', '  devmate relay remove ' + relay + reach] } : {}),
     saved: { connection: staying ? { kind: saved.connection.kind, ...(saved.connection.relay ? { relay: true } : {}) } : saved.connection, auth: saved.auth, ...(saved.openaiTunnel ? { openaiTunnel: saved.openaiTunnel } : {}) }, credential,
     next: [store(credential, 'the credential', 'the credential of another tunnel'), store(tunnelKey, 'the runtime key of the tunnel', 'the runtime key of another tunnel'), 'Apply it: devmate restart', 'Then check: devmate doctor',
-      saved.connection.kind === 'cloudflare-quick' ? 'The address for your client: devmate mcp-url (it stays across restarts and updates of DevMate; it changes after devmate stop, a restart of the computer, or devmate connect quick --new-address)' : null,
+      saved.connection.kind === 'cloudflare-quick' ? 'The address for your client: devmate mcp-url (it stays across restarts and updates of DevMate; it changes after devmate stop, a restart of the computer, or devmate connect quick --new-address and then devmate restart)' : null,
       // Sign-in is asked where a sign-in page can be reached: at the address. Nothing asks for it on the tunnel's way.
       saved.openaiTunnel && saved.auth.mode === 'oauth' ? 'Sign-in is asked at the address only. What comes through OpenAI\'s tunnel is taken as yours without it: who may use the tunnel is decided in the OpenAI account it belongs to.' : null,
       lost && saved.connection.kind !== 'local' ? lost + 'To run it beside this connection: devmate connect beside --openai-tunnel ' + before.tunnelId + (before.organizationId ? ' --organization ' + before.organizationId : '')
@@ -471,7 +473,8 @@ export async function main(argv = process.argv.slice(2), {
       const done = action === 'add' ? registration.add(which) : registration.remove(which);
       const app = { 'claude-code': 'Claude Code', codex: 'Codex', 'claude-desktop': 'Claude Desktop' }[which];
       print({ ...done, next: [action === 'add' ? 'Start a new ' + app + ' session (Claude Desktop: quit it and open it again): it reads its settings when it starts, and DevMate is then one of its MCP servers, named devmate.'
-        : done.removed ? 'Start a new ' + app + ' session: DevMate is no longer one of its servers.' : 'DevMate was not added to ' + app + '.',
+        : done.removed ? 'Start a new ' + app + ' session: DevMate is no longer one of its servers.'
+          : done.elsewhere ? 'The entry named devmate in ' + app + '\'s settings is not one this DevMate added (it was written by hand, or for another DevMate instance): it was left as it is.' : 'DevMate was not added to ' + app + '.',
       action === 'add' ? 'DevMate starts by itself when the client needs it; check with: devmate client' : null].filter(Boolean) });
       return 0;
     }

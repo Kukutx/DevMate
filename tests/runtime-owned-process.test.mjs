@@ -86,6 +86,16 @@ test('a record whose process id now belongs to something else ends nothing', asy
   fs.writeFileSync(file, '{broken');
   assert.deepEqual(await ownedProcess(file).reap(), { reaped: false });
   assert.equal(fs.existsSync(file), false);
+  // Where the system cannot say who the process is (asking took too long on a busy computer), nothing is ended and the
+  // record stays: forgotten, a connector still running could never be found again.
+  const unknown = { identify: async () => { throw Object.assign(new Error('not known'), { code: 'identity_unknown' }); } };
+  fs.writeFileSync(file, JSON.stringify({ pid: stranger.pid, identity: 'x|1' }));
+  await assert.rejects(ownedProcess(file, unknown).reap(), { code: 'identity_unknown' });
+  await assert.rejects(ownedProcess(file, unknown).adopt(), { code: 'identity_unknown' });
+  assert.equal(fs.existsSync(file), true); assert.equal(processTree.pidRunning(stranger.pid), true);
+  // Forgetting a process forgets only its own record: the next runtime may have written down another one meanwhile.
+  ownedProcess(file).forget(stranger.pid + 1); assert.equal(fs.existsSync(file), true);
+  ownedProcess(file).forget(stranger.pid); assert.equal(fs.existsSync(file), false);
   // A process that already exited is not written down at all.
   const gone = await connector(t), exited = new Promise(resolve => gone.once('exit', resolve));
   gone.kill('SIGKILL'); await exited;

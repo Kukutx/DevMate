@@ -135,7 +135,7 @@ export async function doctor(service) {
     else tunnelProof('connection.public', status, connection.tunnelId);
     if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel, which Cloudflare offers for trying things out: no uptime guarantee, at most 200 requests at once, no event streams (DevMate answers through it in plain JSON, without progress messages). ' +
       (status.addressSince ? 'Its address has stayed the same since ' + status.addressSince + (status.adopted ? ', kept from before the last restart of DevMate' : '') + '. ' : '') +
-      'The address stays across restarts and updates of DevMate. It changes after devmate stop, a restart of the computer or a sign-out, a long time without a connection to Cloudflare, or devmate connect quick --new-address; the client then has to be given the new one (devmate mcp-url).',
+      'The address stays across restarts and updates of DevMate. It changes after devmate stop, a runtime that ended on an error, a restart of the computer or a sign-out that ends your programs, a long time without a connection to Cloudflare, or devmate connect quick --new-address followed by devmate restart; the client then has to be given the new one (devmate mcp-url).',
       'For daily use take an address that stays: an OpenAI tunnel or a Cloudflare tunnel on a domain of yours ("Configure Connection" in the editor, or devmate connect).');
   }
   // OpenAI's tunnel beside that connection: a second way in, with a key and a state of its own.

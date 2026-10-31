@@ -376,8 +376,9 @@ export function createProcessManager({ instanceRoot, store, shell = detectShell(
     let reaped = 0;
     for (const name of names) {
       const file = path.join(ownedDirectory, name);
-      // One that cannot be ended does not keep DevMate from starting; its record goes, so it is not tried for ever.
-      try { if ((await ownedProcess(file).reap()).reaped) reaped++; } catch { fs.rmSync(file, { force: true }); }
+      // One that cannot be ended does not keep DevMate from starting; its record goes, so it is not tried for ever. (One
+      // the system could not say anything about is tried again at the next start.)
+      try { if ((await ownedProcess(file).reap()).reaped) reaped++; } catch (error) { if (error.code !== 'identity_unknown') fs.rmSync(file, { force: true }); }
     }
     return { reaped, found: names.length };
   }

@@ -238,17 +238,21 @@ test('the runtime is started with the owner environment, without the variables a
   // (And without what Claude Code puts on what it starts, where its MCP server, DevMate's bridge, starts the runtime:
   // its session's marks and its messaging credential. What the owner set for the agents themselves stays, and so do
   // Codex's sandbox marks: a runtime started in that sandbox is in it.)
+  // (The names are those a session of Claude Code in its desktop app puts there.)
   const names = ['ELECTRON_RUN_AS_NODE', 'VSCODE_IPC_HOOK', 'VSCODE_PID', 'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_AGENT_SDK_VERSION',
-    'CLAUDE_PID', 'HOST_SESSION_ID', 'CHILD_SESSION', 'AI_AGENT', 'DEVMATE_LAUNCH_VISIBLE', 'CODEX_HOME', 'CLAUDE_CODE_USE_BEDROCK', 'CODEX_SANDBOX'];
+    'CLAUDE_PID', 'HOST_SESSION_ID', 'CHILD_SESSION', 'AI_AGENT', 'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH',
+    'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_USER_EMAIL', 'CLAUDE_CODE_ACCOUNT_UUID', 'CLAUDE_CODE_ORGANIZATION_UUID', 'CLAUDE_CODE_OAUTH_SCOPES', 'CLAUDE_CODE_SIMPLE', 'CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES',
+    'ANTHROPIC_BASE_URL', 'DEVMATE_LAUNCH_VISIBLE', 'CODEX_HOME', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CONFIG_DIR', 'CODEX_SANDBOX'];
   const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
   for (const name of names) process.env[name] = '1';
+  process.env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:41234';
   t.after(() => { for (const name of names) if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; });
   let launched;
   const { EventEmitter } = await import('node:events');
   const spawnImpl = (file, args, options) => { launched = { file, args, options }; const child = new EventEmitter(); child.pid = 1; child.exitCode = 1; child.unref = () => {}; return child; };
   const instanceRoot = path.join(temp(t), 'instance');
   await assert.rejects(startRuntime({ instanceRoot, spawnImpl, port: await freePort(), timeoutMs: 2000 }), /exited before readiness/);
-  assert.deepEqual(names.filter(name => launched.options.env[name] !== undefined), ['DEVMATE_LAUNCH_VISIBLE', 'CODEX_HOME', 'CLAUDE_CODE_USE_BEDROCK', 'CODEX_SANDBOX']);
+  assert.deepEqual(names.filter(name => launched.options.env[name] !== undefined), ['DEVMATE_LAUNCH_VISIBLE', 'CODEX_HOME', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CONFIG_DIR', 'CODEX_SANDBOX']);
   assert.ok(Object.keys(launched.options.env).some(name => name.toLowerCase() === 'path'));
   assert.deepEqual([launched.options.detached, launched.options.shell, launched.args.slice(1, 3)], [true, false, ['--instance', instanceRoot]]);
 });

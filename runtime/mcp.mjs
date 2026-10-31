@@ -217,7 +217,7 @@ const found = (uri, reading) => reading.catch(error => { throw error.code === 'n
 
 // surface: whose tool names the client is used to (./surfaces.mjs). listing: the request asks which tools there are,
 // and is told the ones of its surface; any other request finds every tool of every surface, so that a tool can be
-// called whatever list its caller was shown.
+// called whatever list its caller was shown (the workbench's aside, on a surface that cannot show it).
 export function createMcpServer(service, context, { surface = 'generic', listing = false } = {}) {
   // Whoever is not the owner is the runtime checking its own public route. It gets the one tool that says which
   // runtime answers: no instructions, no workbench, no resources, nothing that names a project.

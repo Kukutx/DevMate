@@ -12,6 +12,11 @@ import processTree from '../runtime/platform/process-tree.js';
 
 // A runtime that ends and is started again: after an error of its own, after it was killed, from an editor, from
 // a terminal. (Apart from runtime-launcher.test.mjs, which would take longer than one file may.)
+// The runtimes started here look at the clients' settings (whether DevMate was added to them): those of whoever runs
+// the tests are not read. Where Claude Code, Codex and Claude Desktop keep them is a folder of these tests.
+const clientHome = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-client-home-'));
+for (const name of ['APPDATA', 'LOCALAPPDATA', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME']) process.env[name] = clientHome;
+process.on('exit', () => fs.rmSync(clientHome, { recursive: true, force: true }));
 async function freePort() {
   const server = net.createServer();
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -162,10 +167,15 @@ test('a stop with no runtime running ends a quick tunnel a runtime left running;
   assert.equal(await ownedProcess(record).remember(tunnel.pid,{kind:'cloudflare-quick',forwardsTo:8789}),true);
   await stopRuntime({instanceRoot,timeoutMs:15000,again:true});
   assert.equal(processTree.pidRunning(tunnel.pid),true,'kept for the start that follows');assert.equal(fs.existsSync(record),true);
-  const ended=new Promise(resolve=>tunnel.once('exit',()=>resolve(true)));
+  // And a connector of another connection that a runtime which was killed left behind.
+  const connector=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true});
+  t.after(()=>{try{connector.kill('SIGKILL');}catch{}});
+  await new Promise((resolve,reject)=>{connector.once('spawn',resolve);connector.once('error',reject);});
+  assert.equal(await ownedProcess(path.join(instanceRoot,'connector.json')).remember(connector.pid),true);
+  const ended=new Promise(resolve=>tunnel.once('exit',()=>resolve(true))),gone=new Promise(resolve=>connector.once('exit',()=>resolve(true)));
   assert.equal((await stopRuntime({instanceRoot,timeoutMs:15000})).alreadyStopped,true);
-  let timer;assert.equal(await Promise.race([ended,new Promise(resolve=>{timer=setTimeout(()=>resolve(false),10000);})]).finally(()=>clearTimeout(timer)),true,'the tunnel was ended');
-  assert.equal(fs.existsSync(record),false);
+  let timer;assert.deepEqual(await Promise.race([Promise.all([ended,gone]),new Promise(resolve=>{timer=setTimeout(()=>resolve(false),10000);})]).finally(()=>clearTimeout(timer)),[true,true],'the tunnel and the connector were ended');
+  assert.equal(fs.existsSync(record),false);assert.equal(fs.existsSync(path.join(instanceRoot,'connector.json')),false);
 });
 
 test('a start that fails, so that no runtime holds the instance, ends a quick tunnel kept for it',{timeout:60000},async t=>{

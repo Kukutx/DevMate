@@ -17,16 +17,20 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 //   configured once in the Cloudflare dashboard, and a token identifies the tunnel.
 // cloudflare-quick: a quick tunnel. No account, no token, no domain: Cloudflare hands out an address when the
 //   connector starts, and a different one the next time. The address lives as long as that connector: so the
-//   connector outlives the runtime (a restart, an update, an editor that starts it again, a crash) and the next
-//   runtime takes it back, address and all. An explicit stop, another connection, a new address the owner asks for,
-//   or a connector that lost its way to Cloudflare end it, and the next one is given another address.
+//   connector outlives a runtime that stops to start again (a restart, an update, an editor that restarts it) and
+//   the next runtime takes it back, address and all. An explicit stop, a runtime that failed, another connection, a
+//   new address the owner asks for, or a connector that lost its way to Cloudflare end it, and the next one is given
+//   another address.
 
 // The record of a kept quick tunnel, apart from that of other connectors (OpenAI's tunnel client may run beside it),
 // and the log cloudflared writes itself: a connector that outlives the runtime cannot write into a pipe of the runtime.
 const QUICK_RECORD = 'quick-tunnel.json', QUICK_LOG = 'quick-tunnel.log', LOG_KEPT = 1024 * 1024;
-// How often a quick tunnel is looked at, and how long it may hold no connection to Cloudflare before it is taken for
-// lost (after a long sleep or a long time offline, Cloudflare may have given its address up while the process lives).
-const LOOK_MS = 15000, LOST_MS = 120000;
+// How often a quick tunnel is looked at, and how long it may hold no connection to Cloudflare, or not answer at all,
+// before it is taken for lost and started again (after a long time offline Cloudflare may have given its address up
+// while the process lives). Only time this runtime was awake to look counts: a computer that slept gets the tunnel's
+// own reconnecting first. ADOPT_MS: how long a tunnel kept from before is given to say its address when it is taken
+// back (at a restart the computer is busy).
+const LOOK_MS = 15000, LOST_MS = 10 * 60000, ADOPT_MS = 15000;
 
 /** The quick tunnel a runtime of this instance left running, as it was written down; null where there is none. */
 export function keptQuickTunnel(instanceRoot) {
@@ -57,11 +61,12 @@ const freePort = () => new Promise((resolve, reject) => {
 // went to into its log where one failed, the key of the address with it: that is taken out as it is read, so that
 // nothing that shows the log (the doctor, connection.status) shows the key.
 export const withoutKey = text => String(text).replace(/\/mcp\/[^\s"'/?#&<>]+/g, '/mcp/<key>');
+// (Taken out before the end is cut off: cut first, an address whose "/mcp/" fell just before the cut kept its key.)
 function tail(file, bytes = 4000) {
   try {
-    const size = fs.statSync(file).size, length = Math.min(size, bytes), buffer = Buffer.alloc(length), fd = fs.openSync(file, 'r');
+    const size = fs.statSync(file).size, length = Math.min(size, bytes + 256), buffer = Buffer.alloc(length), fd = fs.openSync(file, 'r');
     try { fs.readSync(fd, buffer, 0, length, size - length); } finally { fs.closeSync(fd); }
-    return withoutKey(buffer.toString('utf8'));
+    return withoutKey(buffer.toString('utf8')).slice(-bytes);
   } catch { return ''; }
 }
 export function normalizeCloudflareConfig(input) {
@@ -83,9 +88,11 @@ export function normalizeCloudflareConfig(input) {
 
 export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, env = process.env,
   spawnImpl = spawn, terminateImpl = processTree.terminateProcessTree, fetchImpl = globalThis.fetch, pickPort = freePort,
-  lookMs = LOOK_MS, lostMs = LOST_MS, now = Date.now,
+  lookMs = LOOK_MS, lostMs = LOST_MS, adoptMs = ADOPT_MS, now = Date.now,
   // Only a process this module really started is written down; a test double has none to find again.
-  owned = spawnImpl === spawn && instanceRoot ? ownedProcess(path.join(instanceRoot, config?.kind === 'cloudflare-quick' ? QUICK_RECORD : 'connector.json')) : null } = {}) {
+  owned = spawnImpl === spawn && instanceRoot ? ownedProcess(path.join(instanceRoot, config?.kind === 'cloudflare-quick' ? QUICK_RECORD : 'connector.json')) : null,
+  // What another connection of a runtime that was killed left running (it is written down apart from a quick tunnel).
+  leftover = spawnImpl === spawn && instanceRoot && config?.kind === 'cloudflare-quick' ? ownedProcess(path.join(instanceRoot, 'connector.json')) : null } = {}) {
   const settings = normalizeCloudflareConfig(config), quick = settings.kind === 'cloudflare-quick';
   const target = new URL(localMcpUrl), logFile = instanceRoot ? path.join(instanceRoot, QUICK_LOG) : null;
   // Which address of the runtime a kept quick tunnel serves: the key in its path is the runtime's to know, and only
@@ -96,7 +103,9 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
   let child = null, phase = 'stopped', diagnostic = '', lastError = null, connections = 0, metrics = null, assigned = null, since = null, queue = Promise.resolve();
   // recorded: the connector running now is written down (or was taken back from the record). Only one that is can be
   // left running for the next runtime: one nobody wrote down, nobody could end.
-  let lookTimer = null, emptySince = null, misses = 0, recorded = false;
+  // emptySince, silentSince: since when it holds no connection, since when it has not answered; counted in time this
+  // runtime was awake to look (lookedAt: the last look).
+  let lookTimer = null, emptySince = null, silentSince = null, lookedAt = null, misses = 0, recorded = false;
   const publicUrl = () => quick ? assigned : settings.publicUrl;
   const serial = action => { const work = queue.then(action); queue = work.catch(() => {}); return work; };
   const recovery = createConnectionRecovery({ restart: () => start(),
@@ -125,32 +134,55 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
   }
   // A quick tunnel is looked at now and then: whether it holds a connection to Cloudflare, and whether a connector
   // taken back from an earlier runtime is still there (it sends this runtime no word when it ends).
+  // (One look at a time, in turn with starts and stops: a stop waits for a look that is ending the tunnel.)
   function watch() {
-    clearInterval(lookTimer); emptySince = now(); misses = 0;
-    lookTimer = setInterval(() => void look(), lookMs); lookTimer.unref?.();
+    clearInterval(lookTimer); emptySince = now(); silentSince = null; lookedAt = now(); misses = 0;
+    lookTimer = setInterval(() => void serial(look), lookMs); lookTimer.unref?.();
+  }
+  // cloudflared writes its log for as long as it runs, weeks for a tunnel that is kept: past its size the log is put
+  // aside now and then. (It appends to it, so the file can be emptied under it: tried with the real one.)
+  function trimLog() {
+    try {
+      if (!logFile || fs.statSync(logFile).size <= LOG_KEPT) return;
+      fs.copyFileSync(logFile, logFile + '.1');
+      const fd = fs.openSync(logFile, 'r+');
+      try { fs.ftruncateSync(fd, 0); } finally { fs.closeSync(fd); }
+    } catch { /* at the next look */ }
   }
   async function look() {
     const watched = child;
     if (!watched || phase === 'stopping' || !metrics) return;
+    trimLog();
+    // After a sleep (or anything else that kept this runtime from looking) the time it did not look does not count.
+    const awake = now();
+    if (awake - lookedAt > 3 * lookMs) { if (emptySince !== null) emptySince = awake; if (silentSince !== null) silentSince = awake; }
+    lookedAt = awake;
     let ready = null;
     try { ready = await ask(metrics, '/ready'); } catch { /* no answer */ }
     if (child !== watched) return;
     if (!ready) {
       // A connector taken back that does not answer twice is looked at as a process: one that is still the one written
-      // down is busy, not gone (a computer under load), and keeps its address.
+      // down is busy, not gone (a computer under load), and keeps its address; so is one the system could not say
+      // anything about.
       if (watched.adopted && ++misses >= 2) {
-        const still = await owned?.adopt(record => record.pid === watched.pid);
+        let still = true;
+        try { still = await owned?.adopt(record => record.pid === watched.pid); } catch { /* not known: as busy */ }
         if (child !== watched) return;
-        if (still) { misses = 0; return; }
-        return lose(watched, 'cloudflared_exited', 'cloudflared, kept from an earlier start, is not there any more.');
+        if (!still) return lose(watched, 'cloudflared_exited', 'cloudflared, kept from an earlier start, is not there any more.');
+        misses = 0;
       }
+      // One that is there and does not answer for long is stuck: ended and started again.
+      silentSince ??= now();
+      if (now() - silentSince >= lostMs) return lose(watched, 'tunnel_stuck', 'cloudflared has not answered for ' + Math.round(lostMs / 60000) + ' minutes. It is started again, under a new address.');
       return;
     }
-    misses = 0; connections = Number(ready.body?.readyConnections) || 0;
+    misses = 0; silentSince = null; connections = Number(ready.body?.readyConnections) || 0;
+    // A tunnel that was slow to be given its address is asked again here.
+    if (!assigned) await learnt(watched);
     if (connections > 0) { emptySince = null; phase = 'connected'; return; }
     if (phase === 'connected') phase = 'connecting';
     emptySince ??= now();
-    if (now() - emptySince >= lostMs) return lose(watched, 'tunnel_lost', 'cloudflared held no connection to Cloudflare for ' + Math.round(lostMs / 60000) + ' minutes (after a long sleep or a long time offline, Cloudflare may have given the address up). It is started again, under a new address.');
+    if (now() - emptySince >= lostMs) return lose(watched, 'tunnel_lost', 'cloudflared held no connection to Cloudflare for ' + Math.round(lostMs / 60000) + ' minutes (after a long time offline, Cloudflare may have given the address up). It is started again, under a new address.');
   }
   // A quick tunnel that is not there or not reached any more is ended and started again, as after an unexpected exit.
   async function lose(lost, code, message) {
@@ -159,16 +191,26 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
     phase = 'failed'; connections = 0; metrics = null; assigned = null; since = null;
     lastError = { code, message }; recorded = false;
     // (What is written down is forgotten only once the process is known to have ended: otherwise the next start ends it.)
-    try { if (lost.adopted) await owned?.reap(); else if ((await terminateImpl(lost))?.exitConfirmed) owned?.forget(); } catch { /* the next start ends what is written down */ }
+    try { if (lost.adopted) await owned?.reap(); else if ((await terminateImpl(lost))?.exitConfirmed) owned?.forget(lost.pid); } catch { /* the next start ends what is written down */ }
     recovery.unexpectedExit();
   }
   // A quick tunnel an earlier runtime of this instance left running, where it is still the one this runtime would
-  // start: the same cloudflared, forwarding to this runtime's port, for this runtime's key.
+  // start: the same cloudflared, forwarding to this runtime's port, for this runtime's key. It is given a little while
+  // to say its address: at a restart the computer is busy. (Where the system cannot say whether it is still that
+  // process, nothing is ended or started: a second tunnel beside one nobody could find again.)
   async function adopt() {
     if (!quick || !owned?.adopt) return false;
-    const record = await owned.adopt(kept => kept.kind === 'cloudflare-quick' && kept.executable === settings.executable && kept.forwardsTo === Number(target.port)
-      && kept.keyId === keyId && typeof kept.metrics === 'string' && /^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(kept.metrics));
-    const hostname = record ? await hostnameOf(record.metrics) : null;
+    let record;
+    try {
+      record = await owned.adopt(kept => kept.kind === 'cloudflare-quick' && kept.executable === settings.executable && kept.forwardsTo === Number(target.port)
+        && kept.keyId === keyId && typeof kept.metrics === 'string' && /^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(kept.metrics));
+    } catch (error) { throw fault('identity_unknown', error.message + ' The quick tunnel kept from before is left as it is: start DevMate again in a moment (devmate restart).'); }
+    let hostname = null;
+    for (const end = now() + adoptMs; record && !hostname;) {
+      hostname = await hostnameOf(record.metrics);
+      if (hostname || now() >= end) break;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
     if (!hostname) return false;
     child = { pid: record.pid, adopted: true }; metrics = record.metrics; assigned = 'https://' + hostname + target.pathname; recorded = true;
     since = typeof record.since === 'string' ? record.since : null; diagnostic = ''; lastError = null; connections = 0; phase = 'connecting';
@@ -178,18 +220,23 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
   // process is can take seconds) after a stop, or after the next runtime wrote down its own, writes nothing.
   const current = proc => () => child === proc && phase !== 'stopping';
   const remembered = async proc => (await owned?.remember(proc.pid, { kind: 'cloudflare-quick', executable: settings.executable, forwardsTo: Number(target.port), keyId, metrics, ...(since ? { since } : {}) }, current(proc)).catch(() => false)) === true;
-  // The address a new quick tunnel is given, asked of cloudflared until it has one; written down with the connector.
+  // The address a new quick tunnel is given, asked of cloudflared until it has one (and later at every look);
+  // written down with the connector.
   async function learn(proc) {
     for (const end = now() + 60000; child === proc && !assigned && now() < end;) {
-      const hostname = metrics ? await hostnameOf(metrics) : null;
-      if (hostname && child === proc) { assigned = 'https://' + hostname + target.pathname; since = new Date(now()).toISOString(); break; }
+      if (await learnt(proc)) return;
       await new Promise(resolve => setTimeout(resolve, 500));
     }
+  }
+  async function learnt(proc) {
+    const hostname = metrics ? await hostnameOf(metrics) : null;
+    if (!hostname || child !== proc || assigned) return false;
+    assigned = 'https://' + hostname + target.pathname; since = new Date(now()).toISOString();
     // Since when it has had its address is added to what was written down when it started, at once: asking the system
     // who the process is again takes seconds, and a restart in those seconds kept a record without it. (Written in
     // full where nothing was written down at the start.)
-    if (!current(proc)() || !assigned) return;
-    if (recorded ? !owned?.amend?.(proc.pid, { since }) : true) { if (await remembered(proc) && child === proc) recorded = true; }
+    if (current(proc)() && (recorded ? !owned?.amend?.(proc.pid, { since }) : true)) { if (await remembered(proc) && child === proc) recorded = true; }
+    return true;
   }
   function start() {
     return serial(async () => {
@@ -198,7 +245,9 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
       if (!startable(settings.executable)) throw fault('cloudflared_not_installed', 'cloudflared was not found at the configured executable path.');
       const token = quick ? '' : env[settings.tokenEnv];
       if (!quick && (typeof token !== 'string' || !token.trim())) throw fault('missing_credential', 'Missing tunnel token environment variable: ' + settings.tokenEnv);
-      await owned?.reap();
+      // What is written down and not taken back is ended first (where the system cannot say who it is, nothing starts).
+      try { await owned?.reap(); await leftover?.reap(); }
+      catch (error) { throw error.code === 'identity_unknown' ? fault('identity_unknown', error.message + ' It is left as it is: start DevMate again in a moment (devmate restart).') : error; }
       diagnostic = ''; lastError = null; connections = 0; metrics = null; assigned = null; since = null; phase = 'starting';
       const inherited = new Set(['path', 'pathext', 'systemroot', 'windir', 'temp', 'tmp', 'home', 'userprofile',
         'programdata', 'https_proxy', 'http_proxy', 'no_proxy', 'ssl_cert_file']);
@@ -217,7 +266,7 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
           if (child !== proc || phase === 'stopping') return;
           child = null; clearInterval(lookTimer);
           phase = 'failed'; connections = 0; metrics = null; assigned = null; since = null;
-          owned?.forget();
+          owned?.forget(proc.pid);
           lastError = { code: 'cloudflared_exited', message: 'cloudflared exited before an explicit stop.', exitCode: code, signal };
           recovery.unexpectedExit();
         };
@@ -268,15 +317,15 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
       return snapshot();
     });
   }
-  // keep: the runtime stops in order to start again (a restart, an update) or because it failed. A quick tunnel is
-  // then left running, written down, for the next runtime to take back with its address. Any other stop ends it.
+  // keep: the runtime stops in order to start again (a restart, an update). A quick tunnel is then left running,
+  // written down, for the next runtime to take back with its address. Any other stop ends it.
   function stop({ keep = false } = {}) {
     recovery.disable();
     return serial(async () => {
       clearInterval(lookTimer);
-      // (A quick tunnel written down for this instance and not running here, kept by a runtime that failed, is ended
-      // by a stop all the same: a stop is a stop.)
-      if (!child) { if (quick && !keep) await owned?.reap().catch(() => {}); phase = 'stopped'; return snapshot(); }
+      // (A quick tunnel written down for this instance and not running here, kept for a start that did not come, is
+      // ended by a stop all the same: a stop is a stop. Where it could not be, that is said.)
+      if (!child) { if (quick && !keep) await owned?.reap().catch(error => { lastError = { code: error.code || 'orphan_connector', message: error.message }; }); phase = 'stopped'; return snapshot(); }
       // Kept only where it is written down: one that is not, nobody could find again to end.
       if (quick && keep && recorded) { child = null; recorded = false; phase = 'stopped'; connections = 0; metrics = null; assigned = null; since = null; return snapshot(); }
       phase = 'stopping';
@@ -284,7 +333,7 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
       else {
         const termination = await terminateImpl(child);
         if (!termination.exitConfirmed) throw fault('shutdown_unconfirmed', 'The owned cloudflared process has not confirmed exit.');
-        owned?.forget();
+        owned?.forget(child.pid);
       }
       child = null; phase = 'stopped'; connections = 0; metrics = null; assigned = null; since = null;
       return snapshot();

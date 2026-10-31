@@ -128,6 +128,10 @@ test('devmate connect quick --new-address takes the key of the address away, and
   const stdout=output(),stderr=output(),alone=await main(['connect','quick','--new-address','--instance',instance],{stdout,stderr});
   assert.equal(alone,0,stderr.text);assert.match(stdout.text,/"renewed": true/);
   assert.equal(fs.readFileSync(configFile,'utf8'),before);assert.notEqual(quickTunnelKey(instance),again);
+  // With an option a quick tunnel does not take, it is refused, as without --new-address: not a new key said as done.
+  const stray=output(),strayErr=output(),key2=quickTunnelKey(instance);
+  assert.equal(await main(['connect','quick','--new-address','--url','https://devmate.example.com/mcp','--instance',instance],{stdout:stray,stderr:strayErr}),1);
+  assert.match(strayErr.text,/does not take --url/);assert.equal(quickTunnelKey(instance),key2);
   const refused=await run('cloudflare','--url','https://devmate.example.com/mcp','--new-address');
   assert.equal(refused.code,1);assert.match(refused.stderr,/does not take --new-address/);
 });

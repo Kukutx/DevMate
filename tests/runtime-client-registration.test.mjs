@@ -40,9 +40,9 @@ test('each client is given DevMate in its own settings file, where its documenta
   // Codex: its table where the older one stood, with time for a runtime to start and the owner's variables a runtime
   // needs named to it; every other line of the file as it was, its line endings, and the comment of the next table.
   const toml = fs.readFileSync(codex, 'utf8');
-  const table = '[mcp_servers.devmate]\r\ncommand = ' + JSON.stringify(node) + '\r\nargs = [' + JSON.stringify(launcher) + ']\r\nstartup_timeout_sec = 60\r\ntool_timeout_sec = 120\r\nenv_vars = [';
+  const table = '[mcp_servers.devmate]\r\ncommand = ' + JSON.stringify(node) + '\r\nargs = [' + JSON.stringify(launcher) + ']\r\nstartup_timeout_sec = 60\r\ntool_timeout_sec = 330\r\nenv_vars = [';
   assert.ok(toml.startsWith('# my settings\r\nmodel = "gpt"\r\n\r\n' + table), toml);
-  assert.match(toml, /env_vars = \[[^\]]*"CODEX_HOME"[^\]]*"HTTPS_PROXY"[^\]]*\]\r\n\r\n# the other one, mine\r\n\[mcp_servers\.other\]\r\ncommand = "other" # mine\r\nargs = \["a\\n\\n\\nb"\]\r\n$/);
+  assert.match(toml, /env_vars = \[(?=[^\]]*"CODEX_HOME")(?=[^\]]*"HTTPS_PROXY")(?=[^\]]*"https_proxy")(?=[^\]]*"SSH_AUTH_SOCK")(?=[^\]]*"NODE_EXTRA_CA_CERTS")[^\]]*\]\r\n\r\n# the other one, mine\r\n\[mcp_servers\.other\]\r\ncommand = "other" # mine\r\nargs = \["a\\n\\n\\nb"\]\r\n$/);
   assert.equal((toml.match(/\[mcp_servers\.devmate/g) || []).length, 1, toml); assert.doesNotMatch(toml, /old\.mjs/); assert.doesNotMatch(toml.replace(/\r\n/g, ''), /\n/, 'no line ending of another kind');
   // Claude Desktop: its mcpServers.
   assert.deepEqual(JSON.parse(fs.readFileSync(desktop, 'utf8')).mcpServers.devmate, { command: node, args: [launcher] });
@@ -74,24 +74,90 @@ test('a settings file DevMate cannot read is left as it is, and a registration o
   assert.deepEqual(registration.status().clients[0], { client: 'claude-code', file: claude, registered: true, stale: true });
 });
 
-test('a config.toml DevMate cannot edit safely is left as it is: devmate defined another way, a multi-line string, a value over several lines', t => {
+test('a config.toml DevMate cannot edit safely is left as it is, and said for what it is: devmate defined another way, mcp_servers given a value of its own, a multi-line string', t => {
   const { home, instance, env } = place(t);
   const codex = clientFile('codex', { home, env }), registration = createClientRegistration({ instanceRoot: instance, cli: path.join(instance, 'cli.mjs'), platform: 'win32', env, home });
   fs.mkdirSync(path.dirname(codex), { recursive: true });
-  for (const [why, text] of [
-    ['an inline table', '[mcp_servers]\ndevmate = { command = "x" }\n'],
-    ['a dotted key', 'mcp_servers.devmate.command = "x"\n'],
-    ['a quoted header', '[mcp_servers.\'devmate\']\ncommand = "x"\n'],
-    ['a subtable', '[mcp_servers.devmate]\ncommand = "x"\n[mcp_servers.devmate.env]\nX = "1"\n'],
-    ['a multi-line string', 'note = """\n[mcp_servers.devmate]\n"""\n'],
-    ['a multi-line string with no devmate in it', 'note = \'\'\'\n[not.a.table]\n\'\'\'\n'],
-    ['a value over several lines', '[mcp_servers.devmate]\nargs = [\n  "a",\n]\n'],
-    ['two tables', '[mcp_servers.devmate]\ncommand = "x"\n[mcp_servers.devmate]\ncommand = "y"\n']]) {
+  const another = /defines devmate in a form DevMate does not write/;
+  for (const [why, text, said] of [
+    ['an inline table', '[mcp_servers]\ndevmate = { command = "x" }\n', another],
+    ['a dotted key', 'mcp_servers.devmate.command = "x"\n', another],
+    ['a dotted key under [mcp_servers]', '[mcp_servers]\nother = { command = "y" }\ndevmate.command = "x"\n', /dotted key or an inline table, at line 3/],
+    ['a quoted [mcp_servers] and an inline table', '["mcp_servers"]\ndevmate = { command = "x" }\n', another],
+    ['a quoted [mcp_servers] with spaces and a quoted dotted key', '[ "mcp_servers" ]\n"devmate".command = "x"\n', another],
+    ['a literal-quoted [mcp_servers]', '[\'mcp_servers\']\ndevmate = {}\n', another],
+    ['mcp_servers as an inline table', 'mcp_servers = { other = { command = "x" } }\n', /gives mcp_servers a value of its own/],
+    ['mcp_servers as a list of tables', '[[mcp_servers]]\nname = "x"\n', /list of tables/],
+    ['a subtable', '[mcp_servers.devmate]\ncommand = "x"\n[mcp_servers.devmate.env]\nX = "1"\n', another],
+    ['a list of devmate tables', '[[mcp_servers.devmate]]\ncommand = "x"\n', another],
+    ['a multi-line string', 'note = """\n[mcp_servers.devmate]\n"""\n', /multi-line string/],
+    ['a multi-line string with no devmate in it', 'note = \'\'\'\n[not.a.table]\n\'\'\'\n', /multi-line string/],
+    ['two tables', '[mcp_servers.devmate]\ncommand = "x"\n[mcp_servers.devmate]\ncommand = "y"\n', /twice/],
+    ['two tables, one of them quoted', '[mcp_servers.devmate]\ncommand = "x"\n["mcp_servers"."devmate"]\ncommand = "y"\n', /twice/],
+    ['a file that is not TOML', 'model = "gpt"\n[mcp_servers.devmate\n', /is not TOML DevMate can read \(line 2\)/]]) {
     fs.writeFileSync(codex, text);
-    for (const action of ['add', 'remove']) assert.throws(() => registration[action]('codex'), { code: 'invalid_settings' }, why + ': ' + action);
+    for (const action of ['add', 'remove']) assert.throws(() => registration[action]('codex'), { code: 'invalid_settings', message: said }, why + ': ' + action);
     assert.equal(fs.readFileSync(codex, 'utf8'), text, why + ': left as it is');
     assert.match(registration.status().clients[1].problem, /left as it is/, why);
   }
+});
+
+test('in config.toml, devmate\'s table is found however its header is quoted and replaced whole, and every line that is not in it is kept as it is', t => {
+  const { home, instance, env } = place(t);
+  const codex = clientFile('codex', { home, env }), registration = createClientRegistration({ instanceRoot: instance, cli: path.join(instance, 'cli.mjs'), platform: 'win32', env, home });
+  fs.mkdirSync(path.dirname(codex), { recursive: true });
+  // DevMate's table as it writes it, from an empty file.
+  registration.add('codex');
+  const table = fs.readFileSync(codex, 'utf8'), launcher = path.join(instance, 'clients', 'devmate-mcp.mjs');
+  const declared = text => (text.match(/^[ \t]*\[[ \t]*(?:mcp_servers|"mcp_servers"|'mcp_servers')[ \t]*\.[ \t]*(?:devmate|"devmate"|'devmate')[ \t]*\]/gm) || []).length;
+  assert.equal(declared(table), 1); assert.ok(table.startsWith('[mcp_servers.devmate]\n'), table);
+  // What the owner has outside it: values of every kind on one line or several, a """ in a comment, quoted keys,
+  // lines inside a list that look like tables, servers named with dotted keys.
+  const theirs = 'model = "gpt" # see """ here\nhttp_headers = { a = "b", "c.d" = \'e\' }\ncommand = \'C:\\x\\y\'\nstartup_timeout_sec = 20.5\n"quoted key" = 1\nwhen = 1979-05-27 07:32:00Z\nlist = [\n  ["mcp_servers"],\n  # [mcp_servers.devmate]\n  ["mcp_servers.devmate"]\n]\n\n[mcp_servers]\nother = { command = "y", args = ["[mcp_servers.devmate]"] }\nthird.command = "z"\n';
+  for (const [why, before, after] of [
+    // Added at the end: nothing of the owner's is touched.
+    ['values DevMate does not write, outside its table', theirs, theirs + '\n' + table],
+    ['servers named with dotted keys at the top of the file', 'mcp_servers.other.command = "x"\n', 'mcp_servers.other.command = "x"\n\n' + table],
+    // Replaced where it stands, in every way TOML lets its header be written, with values of any form in it.
+    ['a literal-quoted name', '[mcp_servers.\'devmate\']\ncommand = "x"\n\n[other]\nk = 1\n', table + '\n[other]\nk = 1\n'],
+    ['a quoted parent and a list over several lines', '["mcp_servers".devmate]\nargs = [\n  "a",\n]\n', table],
+    ['spaces, a basic-quoted name, a comment and values DevMate does not write', '[ mcp_servers . "devmate" ] # mine\ncommand = \'C:\\x\\y\'\nhttp_headers = { a = "b" }\nstartup_timeout_sec = 20.5\n# the next one\n[next]\n', table + '# the next one\n[next]\n']]) {
+    fs.writeFileSync(codex, before);
+    registration.add('codex');
+    const written = fs.readFileSync(codex, 'utf8');
+    assert.equal(written, after, why); assert.equal(declared(written), 1, why);
+    assert.equal(registration.status().clients[1].registered, true, why);
+    registration.remove('codex');
+    if (after !== table && after.endsWith(table)) assert.equal(fs.readFileSync(codex, 'utf8'), before, why + ': taken out again, the file as it was');
+  }
+  // A table DevMate wrote, read whatever quotes the owner put on its values since.
+  fs.writeFileSync(codex, '[mcp_servers.devmate]\ncommand = \'' + process.execPath + '\'\nargs = [ \'' + launcher + '\', ]\n');
+  assert.equal(registration.status().clients[1].registered, true);
+  assert.equal(registration.remove('codex').removed, true); assert.equal(fs.readFileSync(codex, 'utf8'), '');
+});
+
+test('a settings file that is a link stays a link, and the file it points to is the one written; a link to nothing is left as it is', t => {
+  const { root, home, instance, env } = place(t);
+  const dotfiles = path.join(root, 'dotfiles'), registration = createClientRegistration({ instanceRoot: instance, cli: path.join(instance, 'cli.mjs'), platform: 'win32', env, home });
+  fs.mkdirSync(dotfiles); fs.mkdirSync(env.CODEX_HOME, { recursive: true });
+  const codex = clientFile('codex', { home, env }), claude = clientFile('claude-code', { home, env });
+  fs.writeFileSync(path.join(dotfiles, 'config.toml'), 'model = "gpt"\n'); fs.writeFileSync(path.join(dotfiles, 'claude.json'), '{"numStartups":1}');
+  try { fs.symlinkSync(path.join(dotfiles, 'config.toml'), codex, 'file'); } catch (error) {
+    if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error?.code)) { t.skip(`symlink creation unavailable: ${error.code}`); return; }
+    throw error;
+  }
+  fs.symlinkSync(path.join(dotfiles, 'claude.json'), claude, 'file');
+  for (const client of ['codex', 'claude-code']) registration.add(client);
+  for (const file of [codex, claude]) assert.equal(fs.lstatSync(file).isSymbolicLink(), true, file);
+  assert.match(fs.readFileSync(path.join(dotfiles, 'config.toml'), 'utf8'), /^model = "gpt"\n\n\[mcp_servers\.devmate\]\n/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dotfiles, 'claude.json'), 'utf8')).mcpServers.devmate.args[0], registration.launcher);
+  assert.deepEqual(fs.readdirSync(dotfiles).sort(), ['claude.json', 'config.toml'], 'nothing left beside them');
+  for (const client of ['codex', 'claude-code']) assert.equal(registration.remove(client).removed, true);
+  assert.equal(fs.readFileSync(path.join(dotfiles, 'config.toml'), 'utf8'), 'model = "gpt"\n'); assert.equal(fs.lstatSync(codex).isSymbolicLink(), true);
+  // A link to a file that is not there.
+  fs.rmSync(path.join(dotfiles, 'config.toml'));
+  assert.throws(() => registration.add('codex'), { code: 'invalid_settings', message: /is a link to .*which is not there/ });
+  assert.equal(fs.lstatSync(codex).isSymbolicLink(), true); assert.equal(fs.existsSync(path.join(dotfiles, 'config.toml')), false);
 });
 
 test('DevMate takes out only what it wrote for this instance, says when it replaced something else, and finds the settings where the client keeps them', t => {
@@ -148,17 +214,22 @@ test('what a client starts runs DevMate\'s stdio bridge for this instance with t
 
 test('devmate client add and remove are the owner\'s at this computer; a connected client may only look', async t => {
   const { home, instance } = place(t);
-  // (A home of its own, as everywhere here: the owner's real settings are not even read. And no mark of a client that
-  // the environment this test runs in may carry.)
-  const own = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== CLIENT_COMMAND_ENV));
-  const run = async (args, env = {}) => { const stdout = output(), stderr = output(); return { code: await main(['client', ...args, '--instance', instance], { stdout, stderr, env: { ...own, HOME: home, USERPROFILE: home, CODEX_HOME: path.join(home, '.codex'), APPDATA: path.join(home, 'roaming'), LOCALAPPDATA: path.join(home, 'local'), ...env } }), stdout: stdout.text, stderr: stderr.text }; };
+  // (A home of its own, as everywhere here: the owner's real settings are not even read, wherever the environment this
+  // test runs in says they are. And no mark of a client that it may carry.)
+  const places = { HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'roaming'), LOCALAPPDATA: path.join(home, 'local'), CLAUDE_CONFIG_DIR: path.join(home, 'claude-config'), CODEX_HOME: path.join(home, '.codex'), XDG_CONFIG_HOME: path.join(home, '.config') };
+  const own = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== CLIENT_COMMAND_ENV && !(name.toUpperCase() in places)));
+  const run = async (args, env = {}) => { const stdout = output(), stderr = output(); return { code: await main(['client', ...args, '--instance', instance], { stdout, stderr, env: { ...own, ...places, ...env } }), stdout: stdout.text, stderr: stderr.text }; };
   for (const args of [['add', 'codex'], ['remove', 'codex']]) {
     const refused = await run(args, { [CLIENT_COMMAND_ENV]: '1' });
     assert.equal(refused.code, 1); assert.match(refused.stderr, /is run by the owner in their own terminal/);
   }
   const looked = await run([], { [CLIENT_COMMAND_ENV]: '1' });
   assert.equal(looked.code, 0, looked.stderr); assert.match(looked.stdout, /claude-desktop/);
-  assert.ok(looked.stdout.includes(JSON.stringify(path.join(home, '.claude.json')).slice(1, -1)), 'the settings of this home, not the owner\'s');
+  assert.ok(looked.stdout.includes(JSON.stringify(path.join(places.CLAUDE_CONFIG_DIR, '.claude.json')).slice(1, -1)), 'the settings of this home, not the owner\'s');
   const unnamed = await run(['add']);
   assert.equal(unnamed.code, 1); assert.match(unnamed.stderr, /Name the client/);
+  // An entry named devmate the owner wrote by hand is there, and is not DevMate's to take out: said as that.
+  fs.mkdirSync(places.CLAUDE_CONFIG_DIR); fs.writeFileSync(path.join(places.CLAUDE_CONFIG_DIR, '.claude.json'), JSON.stringify({ mcpServers: { devmate: { type: 'http', url: 'http://127.0.0.1:8788/mcp' } } }));
+  const kept = await run(['remove', 'claude-code']);
+  assert.equal(kept.code, 0, kept.stderr); assert.match(kept.stdout, /not one this DevMate added/); assert.doesNotMatch(kept.stdout, /was not added/);
 });

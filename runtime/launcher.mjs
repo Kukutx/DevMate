@@ -87,6 +87,16 @@ export async function runtimeStatus({ instanceRoot, clientFactory = createRuntim
   return { ...alive, state: running ? 'ready' : health?.status === 'stopping' ? 'stopping' : 'unavailable', running, record, health };
 }
 
+// What an editor injects into its own processes, and what Claude Code (or the app it runs in) puts on what it starts:
+// the marks of its session (an agent started later would take itself for one inside that session, a child of a session
+// that has ended), who is signed in, the socket and token of its messaging (a credential every command a client runs
+// would hold), and how that one session was to behave. What the owner set for Claude Code itself (CLAUDE_CONFIG_DIR, a
+// provider such as CLAUDE_CODE_USE_BEDROCK) stays. Codex's sandbox marks stay too: a runtime started inside that
+// sandbox is in it, and says so.
+const SESSION_MARKS = new RegExp('^(ELECTRON_|VSCODE_|CLAUDE_AGENT_SDK_|CLAUDE_CODE_MESSAGING_|CLAUDE_CODE_EMIT_|CLAUDE_PREVIEW_)|^(CLAUDECODE|CLAUDE_PID|AI_AGENT|HOST_SESSION_ID|CHILD_SESSION|' +
+  'CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|HOST_SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|SDK_HAS_HOST_AUTH_REFRESH|EXECPATH|USER_EMAIL|ACCOUNT_UUID|ORGANIZATION_UUID|OAUTH_SCOPES|' +
+  'DESKTOP_APP_VERSION|TERMINAL_MCP_TOOLS|REPORT_FINDINGS|SIMPLE|DISABLE_CRON|EAGER_FLUSH|ENABLE_ASK_USER_QUESTION_TOOL|ENABLE_SDK_FILE_CHECKPOINTING|STARTUP_FAILURE_RESULTS|DISABLE_TERMINAL_TITLE))$', 'i');
+
 export async function startRuntime({
   instanceRoot,
   port,
@@ -134,12 +144,11 @@ export async function startRuntime({
     // it gets the owner's environment, not the variables an editor injects into its own processes.
     // An entry started from a desktop icon has a minimal PATH; the usual tool directories are added so that
     // commands, package managers and agent CLIs are found whichever entry happened to start the runtime.
-    // (Nor what Claude Code puts on what it starts, where its MCP server, DevMate's bridge, starts the runtime: the marks
-    // of its session, and the socket and token of its messaging, a credential every command a client runs would hold;
-    // an agent started later would take itself for one inside that session. What the owner set for Claude Code
-    // itself, a CLAUDE_CODE_ setting, stays. Codex's sandbox marks stay too: a runtime started inside that sandbox is
-    // in it, and says so.)
-    const environment = completePath(Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(ELECTRON_|VSCODE_|CLAUDE_AGENT_SDK_|CLAUDE_CODE_MESSAGING_)|^(CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|CLAUDE_CODE_SESSION_ID|CLAUDE_PID|HOST_SESSION_ID|CHILD_SESSION|AI_AGENT)$/i.test(name))));
+    // (Nor what Claude Code, or the app it runs in, puts on what it starts, where its MCP server, DevMate's bridge, starts
+    // the runtime: see SESSION_MARKS.)
+    const environment = completePath(Object.fromEntries(Object.entries(process.env).filter(([name, value]) => !SESSION_MARKS.test(name) &&
+      // The app's proxy for one session's requests, which ends with it.
+      !(/^ANTHROPIC_BASE_URL$/i.test(name) && process.env.CLAUDECODE && /^https?:\/\/(?:127\.\d+\.\d+\.\d+|localhost|\[::1\])(?::\d+)?(?:\/|$)/i.test(value)))));
     child = spawnImpl(nodePath, [entryPath, '--instance', files.directory, '--port', String(selectedPort)], {
       cwd: files.directory, detached: true, windowsHide: true, shell: false,
       env: environment, stdio: ['ignore', fd, fd]
@@ -205,11 +214,13 @@ export async function stopRuntime({
     // An explicit stop also settles a crash: nothing is left that asks a host to start the runtime again. Where the
     // runtime ran is kept all the same, for the next start.
     if (current.crashed) { try { rememberPort(files, readRuntimeRecord(files.directory)?.port); } catch { /* no record that can be read */ } discardStaleRecord(files); }
-    // A quick tunnel a runtime left running when it failed, or when a restart did not get as far as the start, is ended
-    // by a stop all the same: with no runtime it forwards its address to a port anything on this computer may take.
-    // (quick-tunnel.json is where ./cloudflare-connection.mjs writes it down.)
-    if (!again) await ownedProcess(path.join(files.directory, 'quick-tunnel.json')).reap().catch(() => {});
-    return { stopped: true, alreadyStopped: true, instanceRoot: files.directory };
+    // A quick tunnel a runtime left running for a restart that did not get as far as the start is ended by a stop all
+    // the same: with no runtime it forwards its address to a port anything on this computer may take. So is a connector
+    // a runtime that was killed left behind. (quick-tunnel.json and connector.json are where the connections write them
+    // down.) One that could not be ended is said.
+    const left = [];
+    if (!again) for (const name of ['quick-tunnel.json', 'connector.json']) await ownedProcess(path.join(files.directory, name)).reap().catch(error => { left.push(error.message); });
+    return { stopped: true, alreadyStopped: true, instanceRoot: files.directory, ...(left.length ? { warning: left.join(' ') + ' Nothing of it was ended: run devmate stop again in a moment.' } : {}) };
   }
   const stoppable = current.record && ['ready', 'stopping', 'shutdown_failed'].includes(current.health?.status) &&
     matchesRuntime({ ...current.health, status: 'ready' }, current.record);
