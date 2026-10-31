@@ -117,6 +117,14 @@ test('a coding agent on this computer is shown what DevMate adds to its own tool
   const browser = Object.fromEntries(listed.tools.filter(tool => tool.name.startsWith('browser_')).map(tool => [tool.name, tool.annotations.readOnlyHint]));
   assert.deepEqual(browser, { browser_tabs: true, browser_snapshot: true, browser_screenshot: true, browser_run: false });
   assert.ok(listed.tools.find(tool => tool.name === 'browser_run').inputSchema.properties.steps, 'browser_run takes the steps of chrome.page.run');
+  // On Windows the owner's windows in four more, the same way; elsewhere there are none to read, and they are not shown.
+  const desktop = Object.fromEntries(listed.tools.filter(tool => tool.name.startsWith('desktop_')).map(tool => [tool.name, tool.annotations.readOnlyHint]));
+  assert.deepEqual(desktop, process.platform === 'win32' ? { desktop_windows: true, desktop_snapshot: true, desktop_screenshot: true, desktop_act: false } : {});
+  assert.deepEqual(surfaceFor('agent', { kind: 'bash' }, 'linux').native.filter(name => name.startsWith('desktop_')), []);
+  assert.equal(surfaceFor('agent', { kind: 'pwsh' }, 'win32').native.filter(name => name.startsWith('desktop_')).length, 4);
+  // Underneath they are the capability calls, authorized as those: reading the windows is the owner's to switch on.
+  const refused = await (await f.open({ surface: 'agent' })).callTool({ name: 'desktop_windows', arguments: {} });
+  assert.equal(refused.isError, true); assert.match(refused.content[0].text, process.platform === 'win32' ? /"forbidden"/ : /"not_supported"/);
   // Claude Code is told how large a result may be.
   for (const tool of listed.tools) assert.equal(tool._meta?.['anthropic/maxResultSizeChars'], 140000, tool.name);
   // The instructions say what is DevMate's own, all of it within the first 512 characters (some clients read no more),

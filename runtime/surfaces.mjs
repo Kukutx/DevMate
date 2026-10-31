@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { commandShape, fileText, line, projectPath, projectReference } from './operations/shared.mjs';
 import { BROWSER_CAPABILITIES, BROWSER_TEXT } from './chrome.mjs';
+import { DESKTOP_CAPABILITIES } from './desktop.mjs';
 
 // The tools a model is shown depend on which model it is: one trained on Codex's tools is given apply_patch,
 // exec_command and write_stdin, one trained on Claude Code's is given write, edit and bash, and a client that is
@@ -42,8 +43,9 @@ export const SURFACES = Object.freeze({
   claude: { native: ['read', 'write', 'edit', 'bash', 'show_changes'], direct: [...CORE, 'process.read', 'process.write'],
     names: { 'workspace.changes': 'show_changes', 'workspace.read': 'read', 'workspace.write': 'write', 'workspace.edit': 'edit', 'shell.run': 'bash' } },
   // A coding agent on this computer: no tool of DevMate's to read, write or run (its own do that, and these stay
-  // callable), the owner's browser in four tools of its own, and no workbench (it shows no MCP Apps).
-  agent: { native: ['browser_tabs', 'browser_snapshot', 'browser_screenshot', 'browser_run'], direct: CORE, names: {}, workbench: false }
+  // callable), the owner's browser in four tools of its own and on Windows their windows in four more, and no workbench
+  // (it shows no MCP Apps).
+  agent: { native: ['browser_tabs', 'browser_snapshot', 'browser_screenshot', 'browser_run', 'desktop_windows', 'desktop_snapshot', 'desktop_screenshot', 'desktop_act'], direct: CORE, names: {}, workbench: false }
 });
 
 /**
@@ -51,8 +53,10 @@ export const SURFACES = Object.freeze({
  * commands run in PowerShell, the Claude surface's command tool is called powershell, the name Claude Code itself
  * gives that tool on Windows, and not bash.
  */
-export function surfaceFor(surface, shell) {
+export function surfaceFor(surface, shell, platform = process.platform) {
   const shown = SURFACES[surface] || SURFACES.generic;
+  // The windows of the computer are read on Windows only: elsewhere their tools are not shown.
+  if (surface === 'agent' && platform !== 'win32') return { ...shown, native: shown.native.filter(name => !name.startsWith('desktop_')) };
   if (surface !== 'claude' || !/^(powershell|pwsh)/.test(shell?.kind || '')) return shown;
   return { ...shown, native: shown.native.map(name => name === 'bash' ? 'powershell' : name), names: { ...shown.names, 'shell.run': 'powershell' } };
 }
@@ -153,13 +157,35 @@ export const NATIVE_TOOLS = Object.freeze({
   browser_tabs: browserTool('tabs.list', 'Browser tabs', ['Looking at the browser\'s tabs', 'Looked at the browser\'s tabs']),
   browser_snapshot: browserTool('page.snapshot', 'Browser page', ['Reading a page in the browser', 'Read a page in the browser']),
   browser_screenshot: browserTool('page.screenshot', 'Browser picture', ['Picturing a page in the browser', 'Pictured a page in the browser']),
-  browser_run: browserTool('page.run', 'Browser steps', ['Working in the browser', 'Worked in the browser'])
+  browser_run: browserTool('page.run', 'Browser steps', ['Working in the browser', 'Worked in the browser']),
+  desktop_windows: desktopTool('windows', 'Windows on the screen', ['Looking at the windows', 'Looked at the windows']),
+  desktop_snapshot: desktopTool('snapshot', 'Window controls', ['Reading a window', 'Read a window']),
+  desktop_screenshot: desktopTool('screenshot', 'Window picture', ['Picturing a window', 'Pictured a window']),
+  desktop_act: desktopTool('act', 'Window control', ['Working in a window', 'Worked in a window'])
 });
 
 /**
  * One method of the owner's browser as a tool of its own: the same input as capability_query or capability_call
  * takes for it, and the same call underneath (capability.query or capability.call, authorized and answered as those).
  */
+/**
+ * One method of the windows of the owner's computer as a tool of its own, in the same way: the same input, and the same
+ * call underneath. Whether the windows are read, and the programs acted in, are the owner's at their computer.
+ */
+function desktopTool(method, title, labels) {
+  const capability = DESKTOP_CAPABILITIES.find(item => item.method === method);
+  return { title, labels, readOnly: capability.readOnly, ...(capability.readOnly ? {} : { destructive: true, openWorld: true }),
+    description: () => 'The windows of the owner\'s computer (Windows), ' + capability.name + ': ' + capability.description + ' Reading them, and the programs acted in, are the owner\'s to switch on at their computer.',
+    shape: capability.schema.shape,
+    run: async ({ call, present }, input) => {
+      const operation = capability.readOnly ? 'capability.query' : 'capability.call';
+      const result = await call(operation, { capability: capability.name, input });
+      if (Array.isArray(result?.content)) return { content: result.content };
+      // A window's controls are given as their lines, and what goes with them as data.
+      if (typeof result?.text === 'string') { const { text, ...rest } = result; return { content: [{ type: 'text', text: text + '\n' + JSON.stringify(rest) }] }; }
+      return present(operation, result);
+    } };
+}
 function browserTool(method, title, labels) {
   const capability = BROWSER_CAPABILITIES.find(item => item.method === method);
   return { title, labels, readOnly: capability.readOnly, ...(capability.readOnly ? {} : { destructive: true, openWorld: true }),

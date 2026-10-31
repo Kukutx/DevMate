@@ -75,6 +75,7 @@ export function serverInstructions(service, surface = 'generic') {
   const agent = surface === 'agent';
   // (What matters is said within the first 512 characters, which is all some clients read.)
   const lead = agent ? 'DevMate is on the user\'s computer beside you. Do files and commands with your own tools; use DevMate for: the owner\'s browser (browser_tabs, browser_snapshot, browser_screenshot, browser_run), ' +
+    (process.platform === 'win32' ? 'their windows (desktop_windows and the like), ' : '') +
     'other shared projects (project_list, project_overview), editor errors (editor_diagnostics), file history and restore (workspace_history, workspace_restore), running commands (process_list, process_stop)' +
     (service.delegation === 'off' ? '' : ', delegation (agents_delegate)') + '. projectId: a project id, root or name.'
     : 'DevMate works directly in software projects on the user\'s own computer. Start with project_overview: Git state, scripts, layout and the project\'s own rules (AGENTS.md and similar), which you must follow. ' +
