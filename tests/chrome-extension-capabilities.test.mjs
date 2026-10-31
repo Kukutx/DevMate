@@ -429,9 +429,17 @@ test('a picture of the tab in front is not handed over where another tab came to
   turns.push({ tabId: 2, windowId: 7 }, { tabId: 1, windowId: 7 });
   await refuses(methods['page.screenshot'](), 'browser_error', /^Another tab came to the front of this window while it was pictured/);
   assert.equal(heard.size, 0, 'and it is listened for no longer');
+  // This tab coming to the front of its window while it is pictured means it was not there a moment before.
+  turns.splice(0, 2, { tabId: 1, windowId: 7 });
+  await refuses(methods['page.screenshot'](), 'browser_error', /^Another tab came to the front/);
+  // It is listened for from before the tab is looked up: a tab brought forward and back while that is asked is heard.
+  turns.length = 0;
+  chrome.tabs.get = async id => { for (const listener of heard) { listener({ tabId: 2, windowId: 7 }); listener({ tabId: 1, windowId: 7 }); } return tabOf(id); };
+  await refuses(methods['page.screenshot']({ tabId: 1 }), 'browser_error', /^Another tab came to the front/);
   // Another window's tabs change nothing of this picture.
-  turns.splice(0, 2, { tabId: 4, windowId: 8 });
+  turns.push({ tabId: 4, windowId: 8 });
   assert.equal((await methods['page.screenshot']()).base64, 'AAAA');
+  assert.equal(heard.size, 0);
 });
 
 test('answer gives the result of a method, and an empty object as its input when none was sent', async () => {

@@ -26,7 +26,8 @@ function standIn(replies = {}) {
     onEvent: { addListener: listener => listeners.event.push(listener) }, onDetach: { addListener: listener => listeners.detach.push(listener) } } };
   // The watch on a tab that does not answer its first question (five seconds) is kept apart from the other timers:
   // every tab starts one when it is first put under the debugger, and it is called off as soon as the tab answers.
-  const fakes = { clock: () => time.now, schedule: (run, ms) => { const timer = { run, ms, cancelled: false }; (ms === 5000 ? watches : timers).push(timer); return timer; }, cancel: timer => { if (timer) timer.cancelled = true; },
+  // refsFrom: 0, so that a ref is the number the browser gives an element (the refs of the extension begin elsewhere by chance).
+  const fakes = { refsFrom: 0, clock: () => time.now, schedule: (run, ms) => { const timer = { run, ms, cancelled: false }; (ms === 5000 ? watches : timers).push(timer); return timer; }, cancel: timer => { if (timer) timer.cancelled = true; },
     pause: async ms => { pauses.push(ms); time.now += ms; }, onChange: list => changes.push(list) };
   return { chrome, replies, fakes, log, timers, watches, changes, pauses, time,
     say: (tabId, method, params = {}) => { for (const listener of listeners.event) listener({ tabId }, method, params); },
@@ -511,6 +512,17 @@ test('an element is found by its ref from the snapshot, by a selector, or by the
   for (const selector of ['', 5, 's'.repeat(1001)]) await refuses(methods['page.inspect']({ selector }), 'invalid_input', /selector/);
   for (const text of ['', 5, 't'.repeat(501)]) await refuses(methods['page.inspect']({ text }), 'invalid_input', /text/);
   assert.equal(sent('Runtime.callFunctionOn').length, 5, 'nothing is asked of an element that was not found');
+});
+
+test('the refs of one start of the extension begin where chance puts them: a ref given before it started anew is not one of now', async () => {
+  const stand = standIn(shown({ 'Accessibility.getFullAXTree': shop() })), { refsFrom, ...fakes } = stand.fakes;
+  assert.equal(refsFrom, 0, 'the other tests number refs as the browser does');
+  const debug = createDebugger(stand.chrome, { target: async tabId => ({ id: tabId ?? 1, title: 'T', url: 'https://app.example/' }), ...fakes });
+  const text = (await debug.methods['page.snapshot']()).text, home = Number(/\[(\d+)\] link "Home"/.exec(text)[1]);
+  assert.ok(home > 1000000 && (home - 13) % 1000000 === 0, text);
+  await refuses(debug.methods['page.scroll']({ ref: 13 }), 'not_found', /^No page\.snapshot of this tab has given the ref 13\./);
+  await debug.methods['page.scroll']({ ref: home });
+  assert.deepEqual(stand.sent('DOM.resolveNode'), [{ backendNodeId: 13 }], 'the ref stands for the element the browser numbers 13');
 });
 
 test('a ref is taken only on the tab and for the page whose snapshot gave it: not from another tab, not once the page has gone elsewhere or loaded again', async () => {

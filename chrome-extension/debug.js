@@ -293,7 +293,10 @@ const inPage = (work, ...given) => '(' + work + ')(' + given.map(value => JSON.s
  * target(tabId) resolves the tab a method works on (the one named, or the one in front). The clock and the timers
  * are passed in so that tests can run without waiting. onChange tells the panel which tabs are being debugged.
  */
-export function createDebugger(chrome, { target, clock = () => Date.now(), schedule = (run, ms) => setTimeout(run, ms), cancel = clearTimeout, pause = ms => new Promise(resolve => setTimeout(resolve, ms)), onChange = () => {} } = {}) {
+// refsFrom: where the refs of this start of the extension begin, by chance, so that a ref given before the extension
+// started anew (it is reloaded with an update, and the browser may stop its background when idle) names nothing now.
+export function createDebugger(chrome, { target, clock = () => Date.now(), schedule = (run, ms) => setTimeout(run, ms), cancel = clearTimeout, pause = ms => new Promise(resolve => setTimeout(resolve, ms)), onChange = () => {},
+  refsFrom = (1 + Math.floor(Math.random() * 999)) * 1000000 } = {}) {
   const sessions = new Map(), opening = new Map(), opened = new Map();
   // issued: the tab and the page each ref was given for. A number given for one page is not given for another, of
   // this tab or of another (a page of another site, drawn by another process, numbers its elements from 1 again), so
@@ -301,7 +304,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   // meanwhile, or the next page of its own tab. pages: the pages of every tab are counted together, while the
   // extension runs, so that no two have the same number (session.page).
   const issued = new Map();
-  let listening = false, unused = FRESH_FROM, pages = 0;
+  let listening = false, unused = refsFrom + FRESH_FROM, pages = 0;
   const raw = (tabId, method, params = {}) => chrome.debugger.sendCommand({ tabId }, method, params);
   const command = (tabId, method, params) => raw(tabId, method, params).catch(error => { throw fail('browser_error', method + ' failed: ' + said(error)); });
   const dialogOf = session => session.dialog.type + ': ' + JSON.stringify(cut(session.dialog.message, 300));
@@ -643,13 +646,13 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
         const held = (await raw(id, 'Accessibility.getFullAXTree', { frameId: framesOf.get(node) }).catch(() => null))?.nodes;
         if (Array.isArray(held) && held.length) inside.set(node, { byId: new Map(held.map(one => [one.nodeId, one])), root: held.find(one => !one.parentId) || held[0], nodes: held });
       }
-      // The ref an element is listed by: the number the browser gives it, unless that number was given for another page
-      // (of this tab or another: their elements are numbered alike), then one that was given for none. One this page
-      // was given stays.
+      // The ref an element is listed by: the number the browser gives it (counted from where this start of the
+      // extension begins), unless that number was given for another page (of this tab or another: their elements are
+      // numbered alike), then one that was given for none. One this page was given stays.
       const current = session.refs.page === listed ? session.refs.ids : new Map(), refOf = new Map([...current].map(([one, node]) => [node, one])), nodeOf = new Map();
       const numbered = node => {
-        const given = issued.get(node);
-        if (!refOf.has(node)) refOf.set(node, given && (given.tab !== id || given.page !== listed) ? ++unused : node);
+        const natural = refsFrom + node, given = issued.get(natural);
+        if (!refOf.has(node)) refOf.set(node, given && (given.tab !== id || given.page !== listed) ? ++unused : natural);
         nodeOf.set(refOf.get(node), node);
         return refOf.get(node);
       };

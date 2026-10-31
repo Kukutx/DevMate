@@ -322,6 +322,7 @@ public static class Check {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern ushort RegisterClassW(ref Kind kind);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateWindowExW(uint exStyle, string kind, string title, uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
   [DllImport("user32.dll")] static extern IntPtr DefWindowProcW(IntPtr hwnd, uint message, IntPtr w, IntPtr l);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr LoadLibraryW(string name);
   static Proc kept = DefWindowProcW;
   [STAThread] public static void Main() {
   var form = new Form { Text = "DevMate desktop check", StartPosition = FormStartPosition.Manual, Location = new Point(-20000, -20000), Width = 420, Height = 260 };
@@ -344,7 +345,8 @@ public static class Check {
     RegisterClassW(ref kind);
     CreateWindowExW(0, "DUIViewWndClassName", "", 0x50000000, 10, 40, 20, 20, files.Handle, IntPtr.Zero, kind.instance, IntPtr.Zero);
   };
-  form.Load += (s, e) => files.Show();
+  // A rich text field of the older kind, for ANSI text, which reads a text that begins as RTF does for formatting.
+  form.Load += (s, e) => { LoadLibraryW("riched20.dll"); CreateWindowExW(0, "RichEdit20A", "old rich", 0x50800004, 220, 160, 150, 30, form.Handle, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero); files.Show(); };
   Application.Run(form);
 } }`;
 test('on Windows a control of a program the owner named is acted on by its own messages: a field filled, a box ticked, a button pressed; a password field, a switched-off button and a read-only field left alone', { skip: process.platform !== 'win32' && 'the windows are acted on on Windows', timeout: 120000 }, async t => {
@@ -377,10 +379,9 @@ test('on Windows a control of a program the owner named is acted on by its own m
   // A field of several lines tells its program that its text changed, as when it is typed into.
   await act({ ref: notes, action: 'setValue', value: 'Hi' });
   assert.equal(await titled('Noted Hi'), 'Noted Hi');
-  // A text that begins as RTF does is not handed to a rich text field, since older ones read it as formatting (this one,
-  // RichEdit 2.0 and later through WM_SETTEXT, would not); other text is put in.
-  for (const value of ['{\\rtf1 x}', '{\\urtf1 x}']) await assert.rejects(act({ ref: rich, action: 'setValue', value }), { code: 'invalid_input', message: /may read a text that begins with \{\\rtf or \{\\urtf as formatting/ }, value);
-  assert.equal((await act({ ref: rich, action: 'setValue', value: 'plain' })).control, 'edit');
+  // A rich text field of today takes a text that begins as RTF does as the text; one of the older kind would take it
+  // for formatting, and is handed no text that begins with "{".
+  assert.equal((await act({ ref: rich, action: 'setValue', value: '{\\rtf1 \\b x}' })).control, 'edit');
   // Not into a password field; not a button switched off nor a field read only; not what a classic control is not
   // pressed or filled by; not a ref no snapshot of this caller's gave.
   await assert.rejects(act({ ref: secret, action: 'setValue', value: 'x' }), { code: 'forbidden', message: /password field/ });
@@ -393,6 +394,12 @@ test('on Windows a control of a program the owner named is acted on by its own m
   // A later snapshot numbers its lines anew: a ref of the one before is not taken.
   assert.match((await desktop.call({ capability: 'desktop.snapshot', input: { handle: window.handle, query: 'Fixed' } })).text, /value="fixed"/);
   await assert.rejects(act({ ref: save, action: 'invoke' }), { code: 'not_found', message: /No desktop\.snapshot of yours of this window gave the ref/ });
+  // (The rich text field of today holds what it was given as its text, with the end of paragraph it adds.)
+  assert.match((await desktop.call({ capability: 'desktop.snapshot', input: { handle: window.handle, query: 'Rich' } })).text, /value="\{\\\\rtf1 \\\\b x\}(\\r)?"/);
+  const old = Number(/\[(\d+)\] edit[^\n]*value="old rich/.exec((await desktop.call({ capability: 'desktop.snapshot', input: { handle: window.handle } })).text)?.[1]);
+  assert.ok(old, 'the older rich text field is there');
+  for (const value of ['{\\rtf1 \\b x}', '{\\urtf1 x}', '{\\rt' + String.fromCharCode(0x301) + 'f1 x}']) await assert.rejects(act({ ref: old, action: 'setValue', value }), { code: 'invalid_input', message: /older kind of rich text field/ }, value);
+  assert.equal((await act({ ref: old, action: 'setValue', value: 'plain' })).control, 'edit');
   // Not in the window where a program asks where to save a file, in a program the owner named all the same.
   const files = (await desktop.call({ capability: 'desktop.windows', input: { query: 'DevMate file check' } })).items[0];
   assert.ok(files, 'the window of the file dialog is there');

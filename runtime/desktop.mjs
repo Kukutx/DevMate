@@ -159,9 +159,12 @@ public static class DevMateDesktop {
   public static string Plain(long handle, string kind, string action, string value, int ms) {
     IntPtr hwnd = new IntPtr(handle), result;
     if (kind == "edit" && action == "setValue") {
-      // A rich text field takes a text that begins as RTF does for formatting, not for the text.
+      // A rich text field of the older kinds (RichEdit 1.0, and 2.0 for ANSI text) takes a text that begins as RTF does
+      // for formatting, not for the text, after Windows has turned it into the ANSI characters of the computer, where
+      // characters of another look may become a backslash: such a field is not handed a text that begins with "{".
       var named = new StringBuilder(64); GetClassName(hwnd, named, 64);
-      if (named.ToString().IndexOf("RichEdit", StringComparison.OrdinalIgnoreCase) >= 0 && value != null && (value.StartsWith("{\\rtf") || value.StartsWith("{\\urtf"))) return "rtf";
+      string kindName = named.ToString();
+      if ((string.Equals(kindName, "RICHEDIT", StringComparison.OrdinalIgnoreCase) || string.Equals(kindName, "RichEdit20A", StringComparison.OrdinalIgnoreCase)) && value != null && value.StartsWith("{", StringComparison.Ordinal)) return "rtf";
       if (SendMessageTimeout(hwnd, 0x0C, IntPtr.Zero, value ?? "", 2, (uint)ms, out result) == IntPtr.Zero) return Marshal.GetLastWin32Error() == 1460 ? "waiting" : "failed";
       if (result == IntPtr.Zero) return "refused";
       // A field of one line tells its program that its text changed; one of several lines set this way does not, and it
@@ -380,7 +383,7 @@ function Act($handle, $ref, $action, $value, $never, $apps, $who) {
     if ($done -eq 'unsupported') { throw ('invalid_input|This control does not take ' + $action + '. It takes: ' + $(if (@([DevMateDesktop]::Offers($el)).Count) { ([DevMateDesktop]::Offers($el) -join ', ') } else { 'none of the actions' }) + '.') }
   }
   if ($done -eq 'refused') { throw ('invalid_input|The program refused ' + $action + ' for this control (it may be busy, or not take it now).') }
-  if ($done -eq 'rtf') { throw 'invalid_input|A rich text field may read a text that begins with {\rtf or {\urtf as formatting, not as the text (older ones do), so DevMate does not hand it such a text. Begin it otherwise.' }
+  if ($done -eq 'rtf') { throw 'invalid_input|This is an older kind of rich text field, which reads a text that begins like {\rtf as formatting, not as the text, so DevMate does not hand it a text that begins with {. Begin it otherwise.' }
   if ($done -eq 'failed') { throw ('invalid_input|' + $(if ($action -eq 'setValue') { 'The text could not be handed to this field' } else { 'The ' + $action + ' could not be handed to this control' }) + ': its program does not take it (it may run with more rights than DevMate, or not answer).') }
   if ($done -eq 'gone') { throw ('not_found|The control of ref ' + $ref + ' is no longer in the window. Take a new desktop.snapshot.') }
   if ($done -eq 'disabled') { throw 'invalid_input|This control is switched off (disabled or read only) for now.' }
@@ -413,7 +416,7 @@ while ($true) {
       'windows' { $result = @{ items = (Windows) } }
       'snapshot' { $result = Snapshot ([long]$request.params.handle) ([int]$request.params.most) ([int]$request.params.budget) ([string]$request.params.who) ([long]$request.params.base) }
       'screenshot' { $result = Screenshot $(if ($null -ne $request.params.handle) { [long]$request.params.handle } else { $null }) }
-      'act' { $result = Act ([long]$request.params.handle) ([int]$request.params.ref) ([string]$request.params.action) $request.params.value @($request.params.never) @($request.params.apps) ([string]$request.params.who) }
+      'act' { $result = Act ([long]$request.params.handle) ([long]$request.params.ref) ([string]$request.params.action) $request.params.value @($request.params.never) @($request.params.apps) ([string]$request.params.who) }
       default { throw 'not_supported|No such method: ' + $request.method }
     }
     $answer = @{ id = $request.id; ok = $true; result = $result }
