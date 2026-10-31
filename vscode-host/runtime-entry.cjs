@@ -540,6 +540,58 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     await vscode.env.clipboard.writeText(issued.code);
     await notify.showInformationMessage('Copied a one-time sign-in code. Paste it on the DevMate authorization page; it expires in 10 minutes.');
   }
+  // DevMate as an MCP server of Claude Code, Codex or Claude Desktop on this computer, added or taken out here (what
+  // `devmate client add|remove` does, run with the Node this window uses for DevMate).
+  const CLIENT_APPS = { 'claude-code': 'Claude Code', codex: 'Codex', 'claude-desktop': 'Claude Desktop' };
+  async function clients() {
+    const { clients: found } = await client.command(['client']);
+    const picked = await vscode.window.showQuickPick(found.map(item => {
+      const remove = item.registered && !item.stale, app = CLIENT_APPS[item.client] || item.client;
+      return { label: (remove ? 'Remove DevMate from ' : 'Add DevMate to ') + app + (item.stale ? ' again' : ''), detail: item.file, client: item.client, app, remove,
+        description: item.stale ? 'added, but what starts it there is gone' : remove ? 'added' : item.elsewhere ? 'its devmate entry is not this DevMate\'s: it would be replaced' : item.problem ? 'its settings cannot be read' : '' };
+    }), { placeHolder: 'DevMate as an MCP server of the AI clients on this computer', ignoreFocusOut: true });
+    if (!picked) return;
+    if (picked.remove && await notify.showWarningMessage('Remove DevMate from ' + picked.app + '?', { modal: true }, 'Remove') !== 'Remove') return;
+    const done = await client.command(['client', picked.remove ? 'remove' : 'add', picked.client]);
+    await notify.showInformationMessage((done.next || []).join(' ') || 'Done.');
+    return done;
+  }
+  // A new address for the quick tunnel (what `devmate connect quick --new-address` and a restart do): for an address
+  // that got out.
+  async function newAddress() {
+    if ((await client.call('settings.read', {})).saved?.connection?.kind !== 'cloudflare-quick') {
+      await notify.showInformationMessage('DevMate does not use a Cloudflare quick tunnel, so there is no quick tunnel address to renew. "DevMate: Configure Connection" chooses how clients reach it.');
+      return;
+    }
+    const sure = await notify.showWarningMessage('Give the quick tunnel a new address?', { modal: true,
+      detail: 'The address your clients have stops working at once, and each of them has to be given the new one. Do this if the address got out. DevMate is restarted for it; other windows and connected clients reconnect.' }, 'New address');
+    if (sure !== 'New address') return;
+    await client.command(['connect', 'quick', '--new-address']);
+    await restart();
+    await notify.showInformationMessage('The quick tunnel is starting under a new address. Give it to your client in a few seconds: "DevMate: Copy MCP URL".');
+  }
+  // The windows of this computer: whether DevMate reads them, and the programs it may act in. The owner's to set, here.
+  async function desktopWindows() {
+    if (process.platform !== 'win32') { await notify.showInformationMessage('Reading the windows of the computer is there on Windows only, for now.'); return; }
+    const { settings: current = {}, fullAccess } = (await client.call('capability.settings', { engine: 'desktop' })).items?.[0] || {};
+    const reading = current.enabled === true || (current.enabled == null && fullAccess === true), apps = current.apps || [];
+    const choice = await vscode.window.showQuickPick([
+      reading ? { label: 'Stop reading the windows', description: 'Your client no longer sees what is open on this computer' + (fullAccess ? ', with full access neither' : ''), enabled: false }
+        : { label: 'Read the windows', description: 'Your client can list the windows, read their controls (never a password) and take pictures of them', enabled: true },
+      { label: 'Programs DevMate may act in…', description: apps.length ? apps.join(', ') : 'none: it only reads', apps: true }
+    ], { placeHolder: 'The windows of this computer — ' + (reading ? 'read' : 'not read'), ignoreFocusOut: true });
+    if (!choice) return;
+    let settings;
+    if (choice.apps) {
+      const entered = await notify.showInputBox({ title: 'DevMate: Windows of This Computer', ignoreFocusOut: true, value: apps.join(', '), placeHolder: 'notepad, calc',
+        prompt: 'The programs, by their name without .exe and separated by commas, in which DevMate may press, tick, choose or fill a control. Leave empty for none. Never a terminal, an editor, a browser or a password manager.' });
+      if (entered === undefined) return;
+      settings = { apps: entered.split(',').map(name => name.trim()).filter(Boolean) };
+    } else settings = { enabled: choice.enabled };
+    await client.call('capability.configure', { engine: 'desktop', settings });
+    await notify.showInformationMessage(settings.apps ? (settings.apps.length ? 'DevMate may act in: ' + settings.apps.join(', ') + '.' : 'DevMate acts in no program.')
+      : settings.enabled ? 'Your client can now read the windows of this computer.' : 'Your client no longer reads the windows of this computer.');
+  }
   async function restart() {
     // (again: stopped to be started at once; a quick tunnel and its address stay.)
     await client.stop({ again: true });
@@ -652,6 +704,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
       ...(state.outdated ? [{ label: 'Restart to update the runtime', description: 'running ' + (state.record?.version || 'an older version') + ', this extension ships ' + state.host?.version, command: 'restart' }] : []),
       { label: 'Open workbench', command: 'open' }, { label: 'Copy MCP URL', command: 'copyMcpUrl' },
       { label: 'Folder sharing…', command: 'registerFolder' }, { label: 'Permission profile…', command: 'accessProfile' }, { label: 'Configure connection', command: 'configureConnection' },
+      { label: 'Add to Claude Code, Codex or Claude Desktop…', command: 'clients' }, ...(process.platform === 'win32' ? [{ label: 'Windows of this computer…', command: 'desktopWindows' }] : []),
       { label: 'Doctor', command: 'doctor' }, { label: 'Restart shared runtime', command: 'restart' }, { label: 'Stop shared runtime', command: 'stop' }
     ], { placeHolder: 'DevMate — ' + state.state });
     if (picked) await vscode.commands.executeCommand?.('devMate.runtime.' + picked.command);
@@ -707,7 +760,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
       open: async () => vscode.env.openExternal(vscode.Uri.parse(await client.workbenchUrl())),
       operations: () => showOperations(false),
       call: () => showOperations(true),
-      selectWorkspace, registerFolder: changeSharing, accessProfile, doctor, copyMcpUrl, loginCode, configureConnection, menu
+      selectWorkspace, registerFolder: changeSharing, accessProfile, doctor, copyMcpUrl, loginCode, configureConnection, menu, clients, newAddress, desktopWindows
     };
     for (const [name,handler] of Object.entries(handlers)) {
       context.subscriptions.push(vscode.commands.registerCommand('devMate.runtime.'+name,async (...args) => {

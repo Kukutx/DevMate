@@ -49,7 +49,7 @@ New to DevMate and want ChatGPT on the web or Claude.ai working on your computer
 With VS Code:
 
 1. Open a project folder and run **DevMate: Start DevMate Runtime** from the Command Palette. The folder is shared, read and write, and the window tells you so once.
-2. Run **DevMate: Copy MCP URL**. For a client on the same computer that is all: `devmate client add claude-code` (or `codex`, `claude-desktop`).
+2. For Claude Code, Codex or Claude Desktop on the same computer, run **DevMate: Add to Claude Code, Codex or Claude Desktop** and pick it (from a terminal: `devmate client add claude-code`, or `codex`, `claude-desktop`). For any other client run **DevMate: Copy MCP URL**.
 3. For ChatGPT on the web or Claude.ai, run **DevMate: Configure Connection** once (see [Connecting a client](#connecting-a-client)), then add the copied address as a custom MCP connector.
 4. Ask the model for "an overview of my project". It calls `project_overview` and you are working.
 

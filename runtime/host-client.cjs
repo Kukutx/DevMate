@@ -45,23 +45,36 @@ function createHostClient(options = {}) {
   // (a terminal, another entry) on a port this entry's settings do not name, and a start or a restart from here moved
   // it, away from the clients on this computer and the route of a tunnel set to it.
   const startPort = () => options.port;
+  // An editor's own executable is Electron, not Node: use the configured Node, else the one on PATH.
+  const nodeRuntime = () => {
+    try { return (options.resolveNode || resolveNodeRuntime)({ preferredExecutable: options.nodePath || '', processExecutable: '' }); }
+    catch (cause) {
+      // What each try said: a Node that is there but too old, or too slow to answer, is not one that is missing.
+      const said = reason => /ENOENT/.test(reason) ? 'not found' : /ETIMEDOUT/.test(reason) ? 'did not answer in time' : String(reason || 'not usable').slice(0, 120);
+      const tried = (cause.attempts || []).filter(item => item.source !== 'host').map(item => (item.source === 'configured' ? 'the one in the settings' : 'node on PATH') + ': ' + said(item.reason)).join('; ');
+      const error = new Error('DevMate needs Node.js 24 or newer and did not find one it can use' + (tried ? ' (' + tried + ')' : '') + '. Install it from https://nodejs.org, or enter the path of the Node executable in the DevMate settings of this editor.');
+      error.code = 'NODE_REQUIRED';
+      error.cause = cause;
+      throw error;
+    }
+  };
   return {
     async start() {
-      // An editor's own executable is Electron, not Node: use the configured Node, else the one on PATH.
-      let node;
-      try { node = (options.resolveNode || resolveNodeRuntime)({ preferredExecutable: options.nodePath || '', processExecutable: '' }); }
-      catch (cause) {
-        // What each try said: a Node that is there but too old, or too slow to answer, is not one that is missing.
-        const said = reason => /ENOENT/.test(reason) ? 'not found' : /ETIMEDOUT/.test(reason) ? 'did not answer in time' : String(reason || 'not usable').slice(0, 120);
-        const tried = (cause.attempts || []).filter(item => item.source !== 'host').map(item => (item.source === 'configured' ? 'the one in the settings' : 'node on PATH') + ': ' + said(item.reason)).join('; ');
-        const error = new Error('DevMate needs Node.js 24 or newer and did not find one it can use' + (tried ? ' (' + tried + ')' : '') + '. Install it from https://nodejs.org, or enter the path of the Node executable in the DevMate settings of this editor.');
-        error.code = 'NODE_REQUIRED';
-        error.cause = cause;
-        throw error;
-      }
+      const node = nodeRuntime();
       // (launcher: a test's own, to see what a start asks for.)
       const launcher = options.launcher || await import('./launcher.mjs');
       return launcher.startRuntime({ ...options, port: startPort(), nodePath: node.executable, clientFactory: await factory() });
+    },
+    // DevMate's own command line, run with that Node: for what is the owner's to do at this computer and is no
+    // operation of the runtime (adding DevMate to a client on this computer, a new address for the quick tunnel). What
+    // it prints is its answer; what it says when it fails is the error. (run: a test's own.)
+    command(args, { run = require('node:child_process').execFile } = {}) {
+      const node = nodeRuntime(), cli = require('node:path').join(__dirname, 'cli.mjs');
+      const instance = options.instanceRoot ? ['--instance', options.instanceRoot] : [];
+      return new Promise((resolve, reject) => run(node.executable, [cli, ...args, ...instance], { windowsHide: true, timeout: 60000, encoding: 'utf8' }, (error, stdout, stderr) => {
+        if (error) return reject(new Error(String(stderr || '').trim().replace(/^Error:\s*/, '') || error.message));
+        try { resolve(JSON.parse(stdout)); } catch { resolve({ text: String(stdout).trim() }); }
+      }));
     },
     // again: stopped in order to be started at once (a restart): what lives on between two runtimes stays.
     async stop({ again = false } = {}) {

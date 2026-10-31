@@ -620,6 +620,33 @@ test('the VS Code connection wizard stores the token privately, saves a signed-i
   answers.picks = ['Guarded'];
   assert.equal(await commands.get('devMate.runtime.accessProfile')(), 'guarded');
   assert.deepEqual(named('access.update'), [{ profile: 'full' }, { profile: 'guarded' }]); assert.equal(confirmations.length, 1);
+  // A restart is a stop to start again: a quick tunnel, and its address, stay.
+  const stops = []; client.stop = async options => { stops.push(options); running = false; };
+  await commands.get('devMate.runtime.restart')();
+  assert.deepEqual(stops, [{ again: true }]);
+  // DevMate is added to a client on this computer, or taken out, by the owner here: DevMate's own command line does it.
+  const commanded = [];
+  client.command = async args => { commanded.push(args); return args.length === 1 ? { clients: [{ client: 'claude-code', registered: true, file: 'C:\\u\\.claude.json' }, { client: 'codex', registered: false, file: 'C:\\u\\.codex\\config.toml' }] } : { next: ['Start a new session.'] }; };
+  answers.picks = ['Add DevMate to Codex']; await commands.get('devMate.runtime.clients')();
+  answers.picks = ['Remove DevMate from Claude Code']; await commands.get('devMate.runtime.clients')();
+  assert.deepEqual(commanded, [['client'], ['client', 'add', 'codex'], ['client'], ['client', 'remove', 'claude-code']]);
+  assert.equal(messages.at(-1), 'Start a new session.'); assert.match(confirmations.at(-1).message, /Remove DevMate from Claude Code/);
+  // A new quick tunnel address: only for a quick tunnel, asked first, then DevMate is restarted for it.
+  commanded.length = 0; stops.length = 0;
+  await commands.get('devMate.runtime.newAddress')();
+  assert.deepEqual(commanded, []); assert.match(messages.at(-1), /does not use a Cloudflare quick tunnel/);
+  saved = { ...saved, connection: { kind: 'cloudflare-quick', executable: 'C:\\cf\\cloudflared.exe' } };
+  await commands.get('devMate.runtime.newAddress')();
+  assert.deepEqual(commanded, [['connect', 'quick', '--new-address']]); assert.deepEqual(stops, [{ again: true }]); assert.match(messages.at(-1), /new address/);
+  // The windows of this computer, switched on and the programs named by the owner here (on Windows).
+  if (process.platform === 'win32') {
+    const desktop = { enabled: null, apps: [] };
+    const call = client.call;
+    client.call = async (name, input) => name === 'capability.settings' ? { items: [{ engine: 'desktop', settings: desktop }] } : call(name, input);
+    answers.picks = ['Read the windows']; await commands.get('devMate.runtime.desktopWindows')();
+    answers.picks = ['Programs DevMate may act in…']; answers.inputs = ['notepad, Calc ,']; await commands.get('devMate.runtime.desktopWindows')();
+    assert.deepEqual(named('capability.configure'), [{ engine: 'desktop', settings: { enabled: true } }, { engine: 'desktop', settings: { apps: ['notepad', 'Calc'] } }]);
+  }
   await entry.deactivate();
 });
 

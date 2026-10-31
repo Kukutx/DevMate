@@ -49,7 +49,7 @@ DevMate 让聊天里的模型直接在你自己的电脑上干活：读写和搜
 用 VS Code：
 
 1. 打开一个项目文件夹，在命令面板里运行 **DevMate: Start DevMate Runtime**。这个文件夹会以读写方式共享，窗口会告诉你一次。
-2. 运行 **DevMate: Copy MCP URL**。同一台电脑上的客户端到这一步就够了：`devmate client add claude-code`（或 `codex`、`claude-desktop`）。
+2. 同一台电脑上的 Claude Code、Codex 或 Claude Desktop：运行 **DevMate: 添加到 Claude Code、Codex 或 Claude Desktop**，选中它（在终端里也可以：`devmate client add claude-code`，或 `codex`、`claude-desktop`）。别的客户端运行 **DevMate: Copy MCP URL**。
 3. 要接 ChatGPT 网页版或 Claude.ai，先运行一次 **DevMate: Configure Connection**（见[连接客户端](#连接客户端)），再把复制到的地址作为自定义 MCP 连接器填进去。
 4. 让模型“给我一个项目概览”。它会调用 `project_overview`，然后就可以干活了。
 

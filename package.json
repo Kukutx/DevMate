@@ -142,6 +142,23 @@
         "command": "devMate.runtime.configureConnection",
         "title": "%command.configureConnection%",
         "category": "DevMate"
+      },
+      {
+        "command": "devMate.runtime.clients",
+        "title": "%command.clients%",
+        "category": "DevMate"
+      },
+      {
+        "command": "devMate.runtime.newAddress",
+        "title": "%command.newAddress%",
+        "category": "DevMate",
+        "enablement": "devMate.running"
+      },
+      {
+        "command": "devMate.runtime.desktopWindows",
+        "title": "%command.desktopWindows%",
+        "category": "DevMate",
+        "enablement": "isWindows && devMate.running"
       }
     ],
     "views": {

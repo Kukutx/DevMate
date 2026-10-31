@@ -179,6 +179,15 @@ test('a port an entry was given is named to the launcher, the usual one too; an 
   const stops=[],stopping=createHostClient({launcher:{stopRuntime:async args=>{stops.push(args.again);return{stopped:true};}}});
   try{await stopping.stop({again:true});await stopping.stop();}finally{stopping.dispose();}
   assert.deepEqual(stops,[true,false]);
+  // DevMate's own command line, for what the owner does from an editor and is no operation (a client on this computer, a
+  // new address): run with the Node the entry uses, for its instance; its answer, or what it said when it failed.
+  const ran=[],commanding=createHostClient({instanceRoot:'C:\\inst',resolveNode:()=>({executable:'C:\\node.exe'})});
+  const run=answer=>(file,args,options,done)=>{ran.push([file,args]);answer(done);};
+  try{
+    assert.deepEqual(await commanding.command(['client','add','codex'],{run:run(done=>done(null,'{"added":true}',''))}),{added:true});
+    await assert.rejects(commanding.command(['client','add','nothing'],{run:run(done=>done(new Error('exit 1'),'','Error: Choose one of: claude-code, codex\n'))}),/^Error: Choose one of: claude-code, codex$/);
+  }finally{commanding.dispose();}
+  assert.deepEqual(ran[0],['C:\\node.exe',[require('node:path').resolve('runtime/cli.mjs'),'client','add','codex','--instance','C:\\inst']]);
   // Obsidian: a port the owner wrote in the plugin's settings, and only that.
   assert.deepEqual([chosenPort({}),chosenPort({runtimePort:8788}),chosenPort({runtimePort:9123}),chosenPort({runtimePort:'8788'}),chosenPort(undefined)],[undefined,8788,9123,undefined,undefined]);
 });
