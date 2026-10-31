@@ -12,7 +12,8 @@ import { ownerCommand } from './operations/shared.mjs';
 // What is on the screen reaches past what the owner shares: a file open in an editor that a project keeps out, a folder
 // taken out of sharing, DevMate's own workbench. So the windows are read only once the owner has switched that on at
 // their computer (capability.configure {engine:"desktop", settings:{enabled:true}} from the local surface), or chosen the
-// full access profile, which shares everything. A connected client may switch it off, never on.
+// full access profile, which shares everything unless the owner switched the windows off (enabled:false). A connected
+// client may switch it off, never on.
 //
 // Acting is done only in the programs the owner names at the computer (apps), which full access does not do for them:
 // a control acted on acts as the owner, and in a program that can save files or start others that reaches as far as the
@@ -74,9 +75,10 @@ export const DESKTOP_CAPABILITIES = Object.freeze(METHODS.map(([method, readOnly
 const BY_NAME = new Map(DESKTOP_CAPABILITIES.map(item => [item.name, item]));
 // The owner's settings: whether the windows are read at all (enabled), and the programs whose controls are acted on (apps,
 // by the name of their program, without .exe).
-const program = z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9 ._+-]{0,79}$/, 'a program by its name without .exe, such as notepad');
+const program = z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9 ._+-]{0,79}$/, 'a program by its name without .exe, such as notepad').transform(name => name.replace(/\.exe$/, '')).pipe(z.string().min(1));
 const SETTINGS = z.object({ enabled: z.boolean().nullable().optional(), apps: z.array(program).max(50).nullable().optional() }).strict();
 export const SWITCH_ON = ownerCommand('capability.configure', '{"engine":"desktop","settings":{"enabled":true}}');
+export const SWITCH_OFF = ownerCommand('capability.configure', '{"engine":"desktop","settings":{"enabled":false}}');
 export const SWITCH_INPUT_ON = ownerCommand('capability.configure', '{"engine":"desktop","settings":{"enabled":true,"apps":["notepad"]}}');
 
 // What the PowerShell runs. It reads one request a line from its input and answers one a line, in UTF-8 (a title may
@@ -115,6 +117,20 @@ public static class DevMateDesktop {
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint message, IntPtr w, string l, uint flags, uint ms, out IntPtr result);
   [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr hwnd);
+  [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+  [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr data);
+  [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr hwnd);
+  [DllImport("user32.dll")] static extern int GetDlgCtrlID(IntPtr hwnd);
+  // The window where a program asks where to save a file or which to open: the system's own dialog for it holds the
+  // shell's view of folders. What is chosen there reaches every folder of the computer.
+  public static bool FileDialog(long handle) {
+    IntPtr root = GetAncestor(new IntPtr(handle), 2); if (root == IntPtr.Zero) root = new IntPtr(handle);
+    bool found = false;
+    EnumChildWindows(root, (hwnd, data) => { var kind = new StringBuilder(64); GetClassName(hwnd, kind, 64); string name = kind.ToString(); if (name == "SHELLDLL_DefView" || name == "DUIViewWndClassName") { found = true; return false; } return true; }, IntPtr.Zero);
+    return found;
+  }
+  // Whether the last window drawn did not draw itself, and was copied from the screen instead (see Draw).
+  public static bool FromScreen;
   [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr hwnd, uint id, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out object found);
   static Guid AccessibleId = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
   static Accessibility.IAccessible Msaa(IntPtr hwnd) { object found; return AccessibleObjectFromWindow(hwnd, 0xFFFFFFFC, ref AccessibleId, out found) == 0 ? found as Accessibility.IAccessible : null; }
@@ -140,10 +156,17 @@ public static class DevMateDesktop {
   public static string Plain(long handle, string kind, string action, string value, int ms) {
     IntPtr hwnd = new IntPtr(handle), result;
     if (kind == "edit" && action == "setValue") {
+      // A rich text field takes a text that begins as RTF does for formatting, not for the text.
+      var named = new StringBuilder(64); GetClassName(hwnd, named, 64);
+      if (named.ToString().IndexOf("RichEdit", StringComparison.OrdinalIgnoreCase) >= 0 && value != null && (value.StartsWith("{\\rtf") || value.StartsWith("{urtf"))) return "rtf";
       if (SendMessageTimeout(hwnd, 0x0C, IntPtr.Zero, value ?? "", 2, (uint)ms, out result) == IntPtr.Zero) return Marshal.GetLastWin32Error() == 1460 ? "waiting" : "failed";
-      return result != IntPtr.Zero ? "done" : "refused";
+      if (result == IntPtr.Zero) return "refused";
+      // A field of one line tells its program that its text changed; one of several lines set this way does not, and it
+      // is told as the field tells it (EN_CHANGE), so that the program knows there is something to save.
+      if ((GetWindowLong(hwnd, -16) & 0x4) != 0) PostMessage(GetParent(hwnd), 0x111, new IntPtr((0x300 << 16) | (GetDlgCtrlID(hwnd) & 0xFFFF)), hwnd);
+      return "done";
     }
-    if ((kind == "button" && action == "invoke") || (kind == "checkbox" && action == "toggle") || (kind == "radiobutton" && action == "select")) return PostMessage(hwnd, 0xF5, IntPtr.Zero, IntPtr.Zero) ? "done" : "gone";
+    if ((kind == "button" && action == "invoke") || (kind == "checkbox" && action == "toggle") || (kind == "radiobutton" && action == "select")) return PostMessage(hwnd, 0xF5, IntPtr.Zero, IntPtr.Zero) ? "done" : "failed";
     return "unsupported";
   }
   public static string[] PlainOffers(string kind) { if (kind == "button") return new[] { "invoke" }; if (kind == "checkbox") return new[] { "toggle" }; if (kind == "radiobutton") return new[] { "select" }; if (kind == "edit") return new[] { "setValue" }; return new string[0]; }
@@ -225,6 +248,7 @@ public static class DevMateDesktop {
         done = PrintWindow(hwnd, hdc, 2);
         canvas.ReleaseHdc(hdc);
       }
+      FromScreen = !done;
       var picture = new Bitmap(w, h);
       using (var canvas = Graphics.FromImage(picture)) {
         if (done) canvas.DrawImage(drawn, new Rectangle(0, 0, w, h), new Rectangle(left, top, w, h), GraphicsUnit.Pixel);
@@ -300,12 +324,21 @@ function Snapshot($handle, $most, $budget, $who) {
     $children = New-Object System.Collections.ArrayList
     $child = $walker.GetFirstChild($el, $request)
     while ($null -ne $child -and $children.Count -lt 500) { [void]$children.Add($child); $child = $walker.GetNextSibling($child, $request) }
+    if ($null -ne $child) { $more = $true }
     for ($i = $children.Count - 1; $i -ge 0; $i--) { $stack.Push(@($children[$i], ($depth + 1))) }
   }
+  # Each snapshot numbers its lines from a base of its own, so that a ref of an earlier one (of this caller's, or of
+  # another conversation that goes by the same name) is refused instead of naming another control.
+  $script:shots += 1; $base = $script:shots * 10000
   $key = [string]$who + '|' + [string]$handle
-  $held[$key] = $elements; [void]$heldOrder.Remove($key); [void]$heldOrder.Add($key)
+  $held[$key] = @{ base = $base; elements = $elements }; [void]$heldOrder.Remove($key); [void]$heldOrder.Add($key)
   while ($heldOrder.Count -gt 16) { $held.Remove($heldOrder[0]); $heldOrder.RemoveAt(0) }
-  return @{ nodes = $nodes; more = $more }
+  return @{ nodes = $nodes; more = $more; base = $base }
+}
+# The nearest window with a handle of its own that holds a control: the control's, or one around it.
+function Native($el) {
+  try { $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker; for ($at = $el; $null -ne $at; $at = $walker.GetParent($at)) { $h = $at.Current.NativeWindowHandle; if ($h) { return $h } } } catch { }
+  return 0
 }
 # Whether a program may be acted in: named by the owner, and not among those never acted on.
 function Allowed($program, $apps, $never) {
@@ -316,14 +349,18 @@ function Allowed($program, $apps, $never) {
 }
 function Act($handle, $ref, $action, $value, $never, $apps, $who) {
   if (-not [DevMateDesktop]::Exists($handle)) { throw 'not_found|No window has the handle ' + $handle + ' any more. desktop.windows lists those that are open.' }
-  $refused = Allowed (Program ([DevMateDesktop]::ProcessOf($handle))) $apps $never
+  $program = Program ([DevMateDesktop]::ProcessOf($handle))
+  if ($program -eq 'ApplicationFrameHost') { throw 'not_supported|This is the frame Windows draws around an app from the Microsoft Store (ApplicationFrameHost). DevMate does not act in those apps yet.' }
+  $refused = Allowed $program $apps $never
   if ($refused) { throw $refused }
-  $list = $held[[string]$who + '|' + [string]$handle]
-  if ($null -eq $list -or $ref -gt $list.Count) { throw ('not_found|No desktop.snapshot of yours of this window gave the ref ' + $ref + ' (a ref is of your latest snapshot of its window). Take one, and use a ref from it.') }
-  $el = $list[$ref - 1]
+  $taken = $held[[string]$who + '|' + [string]$handle]; $at = if ($null -ne $taken) { $ref - $taken.base } else { 0 }
+  if ($null -eq $taken -or $at -lt 1 -or $at -gt $taken.elements.Count) { throw ('not_found|No desktop.snapshot of yours of this window gave the ref ' + $ref + ': a ref is of your latest snapshot of its window, and snapshots are forgotten when the program that reads the windows starts anew (after two minutes without a call). Take one, and use a ref from it.') }
+  $el = $taken.elements[$at - 1]
   try { $c = $el.Current; $inside = Program $c.ProcessId } catch { throw ('not_found|The control of ref ' + $ref + ' is no longer in the window. Take a new desktop.snapshot.') }
   $refused = Allowed $inside $apps $never
   if ($refused) { throw $refused }
+  $native = Native $el
+  if ($native -and [DevMateDesktop]::FileDialog($native)) { throw 'forbidden|This is the window where a program asks where to save a file or which one to open. What is chosen there reaches every folder of this computer, past what the owner shares and DevMate''s own settings among them, so DevMate does not act in it: the owner chooses the file themselves.' }
   $told = if ($c.NativeWindowHandle) { [DevMateDesktop]::Describe($c.NativeWindowHandle) } else { $null }
   $plain = if ($told) { $told[0] } else { $null }
   if ($c.IsPassword -or $plain -eq 'password') { throw 'forbidden|This is a password field: DevMate neither types into it nor reads it. The owner fills it in.' }
@@ -338,7 +375,8 @@ function Act($handle, $ref, $action, $value, $never, $apps, $who) {
     if ($done -eq 'unsupported') { throw ('invalid_input|This control does not take ' + $action + '. It takes: ' + $(if (@([DevMateDesktop]::Offers($el)).Count) { ([DevMateDesktop]::Offers($el) -join ', ') } else { 'none of the actions' }) + '.') }
   }
   if ($done -eq 'refused') { throw ('invalid_input|The program refused ' + $action + ' for this control (it may be busy, or not take it now).') }
-  if ($done -eq 'failed') { throw 'invalid_input|The text could not be handed to this field: its program does not take it (it may run with more rights than DevMate, or not answer).' }
+  if ($done -eq 'rtf') { throw 'invalid_input|This field reads a text that begins with {\rtf as formatting, not as the text. Begin it otherwise.' }
+  if ($done -eq 'failed') { throw ('invalid_input|' + $(if ($action -eq 'setValue') { 'The text could not be handed to this field' } else { 'The ' + $action + ' could not be handed to this control' }) + ': its program does not take it (it may run with more rights than DevMate, or not answer).') }
   if ($done -eq 'gone') { throw ('not_found|The control of ref ' + $ref + ' is no longer in the window. Take a new desktop.snapshot.') }
   if ($done -eq 'disabled') { throw 'invalid_input|This control is switched off (disabled or read only) for now.' }
   return @{ control = $(if ($plain) { $plain } else { ($c.ControlType.ProgrammaticName -replace '^ControlType\.', '').ToLower() }); name = $(if ($told) { $told[1] } else { $c.Name }); waiting = ($done -eq 'waiting') }
@@ -355,7 +393,9 @@ function Screenshot($handle) {
   $bitmap = [DevMateDesktop]::Draw($handle)
   if ($null -eq $bitmap) { throw 'invalid_input|This window has no size to picture.' }
   $place = [DevMateDesktop]::Bounds([IntPtr]$handle)
-  return Picture $bitmap $place.Left $place.Top
+  $shown = Picture $bitmap $place.Left $place.Top
+  if ([DevMateDesktop]::FromScreen) { $shown.fromScreen = $true }
+  return $shown
 }
 Add-Type -AssemblyName System.Windows.Forms
 [Console]::Out.WriteLine('{"ready":true}')
@@ -397,10 +437,11 @@ function spawnPowerShell() {
 }
 
 // A window's controls as lines, as page.snapshot shows a page's elements: '[3] button "Save" (disabled)'. A ref is
-// the line's number in the caller's latest snapshot of that window, which desktop.act takes.
-export function desktopLines(nodes) {
-  return nodes.map((node, index) => '  '.repeat(Math.min(node.d || 0, 12)) + '[' + (index + 1) + '] ' + String(node.t || 'Custom').toLowerCase() + (node.n ? ' ' + JSON.stringify(String(node.n).slice(0, 160)) : '') +
-    (node.v !== undefined ? ' value=' + JSON.stringify(String(node.v).slice(0, 120)) : '') + (node.p ? ' (password field)' : '') + (node.a ? ' #' + String(node.a).slice(0, 80) : '') +
+// the line's number in the caller's latest snapshot of that window, which desktop.act takes; each snapshot numbers from
+// a base of its own.
+export function desktopLines(nodes, base = 0) {
+  return nodes.map((node, index) => '  '.repeat(Math.min(node.d || 0, 12)) + '[' + (base + index + 1) + '] ' + String(node.t || 'Custom').toLowerCase() + (node.n ? ' ' + JSON.stringify(String(node.n).slice(0, 160)) : '') +
+    (node.v !== undefined && !node.p ? ' value=' + JSON.stringify(String(node.v).slice(0, 120)) : '') + (node.p ? ' (password field)' : '') + (node.a ? ' #' + String(node.a).slice(0, 80) : '') +
     (Array.isArray(node.s) && node.s.length ? ' (' + node.s.join(', ') + ')' : '') + (Array.isArray(node.b) ? ' @' + node.b.join(',') : ''));
 }
 
@@ -412,15 +453,18 @@ export function desktopLines(nodes) {
 // owner chose the full access profile; never names the programs whose windows are not acted on (tests add one).
 export function createDesktop({ platform = process.platform, spawnHost = spawnPowerShell, idleMs = IDLE_MS, callMs = CALL_MS, startMs = START_MS, walkMs = WALK_MS,
   stored = () => undefined, fullAccess = () => false, never = NEVER_ACTED_ON } = {}) {
-  const switched = () => ({ enabled: stored()?.enabled === true, apps: Array.isArray(stored()?.apps) ? stored().apps : [] });
-  const reads = () => switched().enabled || fullAccess();
+  // enabled: true (read), false (not read, with full access neither), or null where the owner has not chosen (read with
+  // full access only); apps: the programs acted in.
+  const switched = () => ({ enabled: typeof stored()?.enabled === 'boolean' ? stored().enabled : null, apps: Array.isArray(stored()?.apps) ? stored().apps : [] });
+  const reads = () => switched().enabled ?? fullAccess();
   let host = null, sequence = 0;
   const end = (running, why) => {
     if (host !== running) return;
     host = null;
     running.failed(fault('desktop_unavailable', 'The program that reads the windows ended (' + why + ') before it was ready. Ask again: it is started anew.'));
     clearTimeout(running.idle);
-    for (const [, waiting] of running.pending) waiting.reject(fault('desktop_unavailable', 'The program that reads the windows ended (' + why + '). Ask again: it is started anew.'));
+    for (const [, waiting] of running.pending) waiting.reject(fault('desktop_unavailable', 'The program that reads the windows ended (' + why + ').' +
+      (waiting.method === 'act' ? ' Whether the action was done is not known: desktop.snapshot shows the window as it is now.' : ' Ask again: it is started anew.')));
     running.pending.clear();
     try { running.child.kill(); } catch { /* it is gone already */ }
   };
@@ -467,7 +511,7 @@ export function createDesktop({ platform = process.platform, spawnHost = spawnPo
         const timer = setTimeout(() => { running.pending.delete(id); reject(fault('desktop_timeout', DESKTOP_ENGINE + '.' + method + ' was not answered within ' + Math.round(callMs / 1000) + ' seconds: a window that does not answer accessibility tools holds it up.' + unsure)); end(running, 'a call took too long'); }, callMs);
         const cancelled = () => { running.pending.delete(id); clearTimeout(timer); reject(fault('cancelled', DESKTOP_ENGINE + '.' + method + ' was cancelled.' + unsure)); };
         signal?.addEventListener('abort', cancelled, { once: true });
-        running.pending.set(id, { resolve: value => { clearTimeout(timer); signal?.removeEventListener('abort', cancelled); resolve(value); }, reject: error => { clearTimeout(timer); signal?.removeEventListener('abort', cancelled); reject(error); } });
+        running.pending.set(id, { method, resolve: value => { clearTimeout(timer); signal?.removeEventListener('abort', cancelled); resolve(value); }, reject: error => { clearTimeout(timer); signal?.removeEventListener('abort', cancelled); reject(error); } });
         running.child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
       });
     } finally {
@@ -484,11 +528,13 @@ export function createDesktop({ platform = process.platform, spawnHost = spawnPo
     try { params = definition.schema.parse(input); }
     catch (error) { throw error?.name === 'ZodError' ? fault('invalid_input', 'Invalid input for ' + capability + ': ' + error.issues.slice(0, 8).map(issue => (issue.path.length ? issue.path.join('.') + ': ' : '') + issue.message).join('; '), { notStarted: true }) : error; }
     if (platform !== 'win32') throw fault('not_supported', 'DevMate reads the windows of a Windows computer for now; this one runs ' + platform + '.', { notStarted: true });
-    if (!reads()) throw fault('forbidden', 'The owner has not let DevMate read the windows of this computer. What is on the screen reaches past what they share (a file open in an editor, a folder taken out of sharing), so they switch it on at their computer: ' +
-      SWITCH_ON + ' (or with the full access profile). Do not try to work around it.', { notStarted: true });
+    const off = switched().enabled === false;
+    if (!reads()) throw fault('forbidden', (off ? 'The owner has switched off DevMate\'s reading of the windows of this computer' : 'The owner has not let DevMate read the windows of this computer') +
+      '. What is on the screen reaches past what they share (a file open in an editor, a folder taken out of sharing), so they switch it on at their computer: ' +
+      SWITCH_ON + (off ? '' : ' (or with the full access profile)') + '. Do not try to work around it.', { notStarted: true });
     if (definition.method === 'act') {
       if ((params.action === 'setValue') !== (params.value !== undefined)) throw fault('invalid_input', 'value goes with setValue, and only with it.', { notStarted: true });
-      if (!switched().enabled || !switched().apps.length) throw fault('forbidden', 'The owner has not named any program DevMate may act in: a control acted on acts as them. They name the programs at their computer, for example: ' + SWITCH_INPUT_ON + '. Full access does not do it for them. Do not try to work around it.', { notStarted: true });
+      if (!switched().apps.length) throw fault('forbidden', 'The owner has not named any program DevMate may act in: a control acted on acts as them. They name the programs at their computer, for example: ' + SWITCH_INPUT_ON + '. Full access does not do it for them. Do not try to work around it.', { notStarted: true });
       const done = await ask('act', { handle: params.handle, ref: params.ref, action: params.action, ...(params.value !== undefined ? { value: params.value } : {}), never, apps: switched().apps, who }, signal);
       return { handle: params.handle, ref: params.ref, action: params.action, control: done.control, name: done.name,
         ...(done.waiting ? { waiting: true, note: 'The program has not finished it after three seconds: it may have opened a dialog of its own. desktop.windows and desktop.snapshot show what is there now.' } : {}), untrusted: true };
@@ -500,13 +546,14 @@ export function createDesktop({ platform = process.platform, spawnHost = spawnPo
     if (definition.method === 'snapshot') {
       const most = params.maxNodes ?? 300, wanted = params.query?.toLowerCase();
       // With words to look for, the whole window is read and the lines that have them kept.
-      const { nodes = [], more = false } = await ask('snapshot', { handle: params.handle, most: wanted ? 1500 : most, budget: walkMs, who }, signal);
-      const all = desktopLines(nodes), kept = wanted ? all.filter(line => line.toLowerCase().includes(wanted)) : all, given = kept.slice(0, most);
+      const { nodes = [], more = false, base = 0 } = await ask('snapshot', { handle: params.handle, most: wanted ? 1500 : most, budget: walkMs, who }, signal);
+      const all = desktopLines(nodes, base), kept = wanted ? all.filter(line => line.toLowerCase().includes(wanted)) : all, given = kept.slice(0, most);
       return { handle: params.handle, text: given.join('\n'), nodes: given.length, ...(wanted ? { query: params.query, matched: kept.length } : {}),
         ...(kept.length > most || more ? { truncated: true } : {}), untrusted: true };
     }
     const picture = await ask('screenshot', { handle: params.handle ?? null }, signal);
-    return { content: [{ type: 'image', data: picture.base64, mimeType: 'image/png' }, { type: 'text', text: JSON.stringify({ ...(params.handle !== undefined ? { handle: params.handle } : { screen: true }), x: picture.x, y: picture.y, width: picture.width, height: picture.height, ...(picture.scale !== 1 ? { scale: picture.scale } : {}) }) }] };
+    return { content: [{ type: 'image', data: picture.base64, mimeType: 'image/png' }, { type: 'text', text: JSON.stringify({ ...(params.handle !== undefined ? { handle: params.handle } : { screen: true }), x: picture.x, y: picture.y, width: picture.width, height: picture.height, ...(picture.scale !== 1 ? { scale: picture.scale } : {}),
+      ...(picture.fromScreen ? { note: 'The window did not draw itself: this is the screen where it is, with whatever covers it.' } : {}) }) }] };
   }
 
   /** The capabilities as capability_list shows them: all, or one with its input schema. */
@@ -519,27 +566,35 @@ export function createDesktop({ platform = process.platform, spawnHost = spawnPo
       return { capability: { engine: DESKTOP_ENGINE, ...view(item, true) }, hint: 'Invoke with ' + (item.readOnly ? 'capability_query' : 'capability_call') + ' {capability:"' + name + '", input}. No projectId is needed: the windows are the owner\'s, not a project\'s.' };
     }
     return { id: DESKTOP_ENGINE, name: 'The owner\'s windows', description: 'The windows open on the owner\'s computer, the controls of one as accessibility tools read them, and a picture of a window or of the screen; and, in the programs the owner names, one control acted on.',
-      status: platform !== 'win32' ? 'not available on ' + platform : (switched().enabled ? 'on' : fullAccess() ? 'on: the full access profile shares everything' : 'off: the owner switches it on at their computer, ' + SWITCH_ON) +
-        (platform === 'win32' && reads() ? (switched().enabled && switched().apps.length ? '; acting on controls in: ' + switched().apps.join(', ') : '; acting on controls: in no program; the owner names them at their computer, for example ' + SWITCH_INPUT_ON) : ''),
+      status: platform !== 'win32' ? 'not available on ' + platform : (switched().enabled ? 'on' : reads() ? 'on: the full access profile shares everything; the owner can switch it off at their computer, ' + SWITCH_OFF
+        : switched().enabled === false ? 'off: the owner switched it off' + (fullAccess() ? ', with full access too' : '') + '; they switch it on at their computer, ' + SWITCH_ON : 'off: the owner switches it on at their computer, ' + SWITCH_ON) +
+        (platform === 'win32' && reads() ? (switched().apps.length ? '; acting on controls in: ' + switched().apps.join(', ') : '; acting on controls: in no program; the owner names them at their computer, for example ' + SWITCH_INPUT_ON) : ''),
       capabilities: DESKTOP_CAPABILITIES.map(item => view(item, full)) };
   }
   /** The owner's switch as capability.settings shows it. */
-  function settings() { return { items: [{ engine: DESKTOP_ENGINE, settings: switched(), ...(fullAccess() ? { fullAccess: true } : {}) }], hint: 'The owner switches reading on at their computer (' + SWITCH_ON + ') and names the programs DevMate may act in (' + SWITCH_INPUT_ON + '). A connected client may switch reading off and take programs out, never more.' }; }
-  /** Whether a change only takes away: reading switched off, programs taken out, or either set back to its default (none). */
+  function settings() { return { items: [{ engine: DESKTOP_ENGINE, settings: switched(), ...(fullAccess() ? { fullAccess: true } : {}) }], hint: 'The owner switches reading on (' + SWITCH_ON + ') or off, with full access too (' + SWITCH_OFF +
+    '), at their computer, and names the programs DevMate may act in (' + SWITCH_INPUT_ON + '). Where they chose neither (enabled null), the windows are read with the full access profile only. A connected client may switch reading off and take programs out, never more.' }; }
+  /** Whether a change only takes away: reading switched off, programs taken out, either set back to its default (no choice, none) where that reads no more than before. */
   function narrows(patch) {
-    const parsed = SETTINGS.safeParse(patch), had = switched().apps;
-    return parsed.success && Object.entries(parsed.data).every(([name, value]) => value === null || (name === 'enabled' ? value === false : value.every(one => had.includes(one))));
+    const parsed = SETTINGS.safeParse(patch), had = switched();
+    // No choice reads with full access, so it takes away only where the owner had not switched reading off.
+    return parsed.success && Object.entries(parsed.data).every(([name, value]) => name === 'enabled' ? value === false || (value === null && had.enabled !== false)
+      : value === null || value.every(one => had.apps.includes(one)));
   }
   /** Changes the switch. Who may change it how is the caller's to check (operations/capability.mjs). */
   function configure(patch) {
     const parsed = SETTINGS.safeParse(patch);
-    if (!parsed.success) throw fault('invalid_input', 'The windows have two settings: enabled (true or false), to read them, and apps, the programs whose controls are acted on, by their names without .exe (a list of at most 50). null sets either back to its default: off, none.');
-    const next = { ...(stored() || {}) };
+    if (!parsed.success) throw fault('invalid_input', 'The windows have two settings: enabled (true or false), to read them, and apps, the programs whose controls are acted on, by their names without .exe (a list of at most 50). null sets either back to its default: no choice (the windows are read with the full access profile only), no programs.');
+    const next = { ...(stored() || {}) }, had = switched().apps;
     for (const [name, value] of Object.entries(parsed.data)) { if (value === null) delete next[name]; else next[name] = value; }
     stored(next);
     if (!reads() && host) end(host, 'the owner switched the windows off');
+    // An action handed over before a program was taken out is not done afterwards: those waiting end with the program.
+    else if (host && had.some(one => !switched().apps.includes(one)) && [...host.pending.values()].some(waiting => waiting.method === 'act')) end(host, 'the programs DevMate may act in changed');
     return { engine: DESKTOP_ENGINE, settings: switched(), scope: 'instance' };
   }
   function close() { if (host) end(host, 'the runtime is stopping'); }
-  return { call, list, settings, configure, narrows, close };
+  // Whether the windows are read here now, as the doctor says beside full access.
+  const reading = () => platform === 'win32' && reads();
+  return { call, list, settings, configure, narrows, reading, close };
 }

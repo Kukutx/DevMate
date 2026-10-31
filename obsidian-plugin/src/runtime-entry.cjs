@@ -176,8 +176,8 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
   async function accessProfile() {
     const current = (await client.call('access.read', {}, { scoped: false })).profile;
     const choice = await ask('What may your connected AI client decide?', current === 'full'
-      ? 'Full access is on: your client can share folders, read credential files, set up engines and answer agents, and what a delegated agent asks permission for is granted automatically.'
-      : 'Guarded (the default): you share folders, lift credential-file protection and answer agents at this computer. Full access hands all of that to your connected client and grants agent permission requests automatically.',
+      ? 'Full access is on: your client can share folders, read credential files, set up engines, answer agents and, on Windows, read the windows on your screen, and what a delegated agent asks permission for is granted automatically.'
+      : 'Guarded (the default): you share folders, lift credential-file protection and answer agents at this computer. Full access hands all of that to your connected client, lets it read the windows on your screen on Windows, and grants agent permission requests automatically.',
     [{ label: 'Guarded', value: 'guarded', primary: current === 'full' }, { label: 'Full access', value: 'full', warning: current !== 'full' }]);
     if (!choice || choice === current) return current;
     await client.call('access.update', { profile: choice }, { scoped: false });

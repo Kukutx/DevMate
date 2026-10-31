@@ -365,7 +365,7 @@ function createVscodeRuntimeEntry(vscode, { client: suppliedClient, clientFactor
     const current = (await client.call('access.read', {}, { scoped: false })).profile;
     const choice = await vscode.window.showQuickPick([
       { label: 'Guarded', description: 'You share folders, lift credential-file protection and answer agents at this computer', profile: 'guarded' },
-      { label: 'Full access', description: 'Your connected AI client does all of that; agent permission requests are granted automatically', profile: 'full' }
+      { label: 'Full access', description: 'Your connected AI client does all of that and, on Windows, reads the windows on your screen; agent permission requests are granted automatically', profile: 'full' }
     ].map(item => item.profile === current ? { ...item, description: item.description + ' — current' } : item),
     { placeHolder: 'What may an AI client connected as you decide?' });
     if (!choice || choice.profile === current) return current;

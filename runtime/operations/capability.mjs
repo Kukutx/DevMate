@@ -62,10 +62,10 @@ export function defineCapabilityOperations(service, add) {
     { openWorld: true, withoutProject: ofOwner });
   // Without a project these act on the whole runtime, so the project is optional and not filled in.
   add('capability.settings', { projectId: id.optional(), engine: engine.optional() }, true,
-    'Read the settings of the capability engines (browser control and QA, Godot, reverse engineering, Obsidian): whether each is switched on and how it is set up. With projectId the values that apply to that project.',
+    'Read the settings of the capability engines (browser control and QA, Godot, reverse engineering, Obsidian, the windows of the computer): whether each is switched on and how it is set up. With projectId the values that apply to that project.',
     args => args.engine === DESKTOP_ENGINE ? service.desktop.settings() : service.capabilities.settings(args));
   add('capability.configure', { projectId: id.optional(), engine: engine.min(1), settings: z.record(z.string(), z.unknown()), ...mutation }, false,
-    'Change settings of one capability engine for the whole runtime, or with projectId for one project. A null value restores the default; enabled:false switches the engine off. A connected client can only switch an engine off; everything else is set up by the owner on their own computer, or by a connected client when the owner chose the full access profile.',
+    'Change settings of one capability engine for the whole runtime, or with projectId for one project. A null value restores the default; enabled:false switches the engine off. A connected client can only switch an engine off; everything else is set up by the owner on their own computer, or by a connected client when the owner chose the full access profile, but for the windows of the computer (engine desktop), which only the owner widens.',
     (args, context) => {
       // The owner's windows reach past what is shared: reading them, and the programs acted in, are the owner's to widen at
       // this computer, in either profile. A connected client may only take away: reading switched off, programs taken out.

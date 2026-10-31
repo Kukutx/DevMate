@@ -219,6 +219,10 @@ export function createCapabilities(chrome, { version = '', ownPort = () => undef
       // Under a dialog the browser was seen to give the picture at once, and also not at all: it is not waited for to the end.
       const image = await Promise.race([chrome.tabs.captureVisibleTab(page.windowId, { format: 'png' }).catch(error => { throw fail('browser_error', 'The browser did not capture this tab (' + String(error?.message || error).slice(0, 200) + ').'); }),
         later(8000).then(() => { throw fail('browser_error', 'The browser gave no picture of this tab in eight seconds. A page that is showing a dialog may be why: answer it with page.dialog, or, where the tab does not answer that either, close the dialog in the browser or load the page again (tabs.reload).'); })]);
+      // The window is pictured, not the tab: one that came to the front meanwhile (another call brought it there) is
+      // not handed over under this tab's name, nor at all where it is one that is not read through the browser.
+      const front = (await chrome.tabs.query({ active: true, windowId: page.windowId }))[0];
+      if (front?.id !== page.id || own(front)) throw fail('browser_error', 'Another tab came to the front of this window while it was pictured, so the picture was not handed over. Ask again.');
       return { tabId: page.id, mimeType: 'image/png', base64: image.slice(image.indexOf(',') + 1) };
     },
     ...debug.methods
@@ -237,14 +241,16 @@ export function createCapabilities(chrome, { version = '', ownPort = () => undef
       if (step.input?.tabId !== undefined && step.input.tabId !== null) throw fail('invalid_input', 'Step ' + (at + 1) + ': a run works on one tab. Give its tabId once, for the run.');
     }
     const page = await target(tabId), done = [], began = (debugging.clock || Date.now)();
-    // watched: the tab had the debugger on it at some time during the run, so that its going is the owner taking it off.
+    // watched: the tab had the debugger on it at some time during the run, so that its going is the owner taking it off;
+    // also where it was put on and taken off again within one step.
+    const first = debug.opened(page.id);
     let watched = debug.debugging().includes(page.id);
     for (const [at, step] of steps.entries()) {
       const stop = at > 0 && await paused() ? { code: 'paused', message: 'The owner paused DevMate\'s use of this browser while the run went on: this step and those after it were not done.' }
         : watched && !debug.debugging().includes(page.id) ? { code: 'browser_error', message: 'The debugger was taken off this tab while the run went on (the owner took it off, the tab was closed, or it went to a page the debugger does not go to). This step and those after it were not done.' }
         : (debugging.clock || Date.now)() - began > within ? { code: 'timeout', message: 'The run took longer than DevMate waits for it (' + Math.round(within / 1000) + ' seconds): this step and those after it were not done.' } : null;
       done.push({ method: step.method, ...(stop ? { ok: false, error: stop } : await answer(methods, step.method, { ...step.input, tabId: page.id })) });
-      watched ||= debug.debugging().includes(page.id);
+      watched ||= debug.debugging().includes(page.id) || debug.opened(page.id) !== first;
       if (!done.at(-1).ok) return { tabId: page.id, steps: done, failed: at + 1, notDone: steps.length - at - 1, untrusted: true };
     }
     return { tabId: page.id, steps: done, untrusted: true };

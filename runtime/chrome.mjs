@@ -78,7 +78,7 @@ const METHODS = [
   ['page.network', true, 'The requests the page made since the tab is watched: method, address, status, kind, time, and why one failed. failedOnly keeps the failed ones and those answered 400 or above; query keeps those whose address contains it. page.reload shows a page loading from the start.',
     { tabId: tab, since: whole.optional(), failedOnly: z.boolean().optional(), query: text(500).min(1).optional(), limit: limit(500) }],
   ['page.networkRequest', true, 'One request of page.network in full (its requestId): the headers sent and received, what was sent, and what came back.', { tabId: tab, requestId: text(200).min(1), maxChars: z.number().int().min(100).max(200000).optional() }],
-  ['page.snapshot', true, 'The page as its elements: role, name, value and state, as a screen reader meets them. An element that can be acted on has a number in brackets, its ref, for page.click, page.type, page.hover and page.scroll. interactiveOnly keeps buttons, links and fields. What a web component holds is listed too. A frame (iframe) of the same site is listed with its content, one of another site by its address.',
+  ['page.snapshot', true, 'The page as its elements: role, name, value and state, as a screen reader meets them. An element that can be acted on has a number in brackets, its ref, for page.click, page.type and the like. interactiveOnly keeps buttons, links and fields. What a web component holds is listed too. A frame (iframe) of the same site is listed with its content (ten at most), one of another site by its address.',
     { tabId: tab, interactiveOnly: z.boolean().optional(), maxNodes: z.number().int().min(10).max(1500).optional(), ref: element.ref.describe('Only what this element holds: its number in an earlier snapshot.'),
       selector: element.selector.describe('Only what the element this CSS selector finds holds.'), query: text(200).min(1).optional().describe('Only the lines that contain these words (a name, a role): a way to find a ref on a long page.') }],
   ['page.inspect', true, 'One element in detail (by ref, selector or the text it shows): its tag and attributes, its box, its computed styles (the usual ones, or the ones named in styles) and its HTML.',
@@ -98,7 +98,7 @@ const METHODS = [
     { tabId: tab, key: z.string().regex(/^([a-z0-9]|Enter|Tab|Escape|Backspace|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Home|End|PageUp|PageDown|Space)$/i), modifiers: z.array(z.enum(['alt', 'ctrl', 'meta', 'shift'])).max(4).optional() }],
   // The files are named by their paths in the project of the call; the runtime hands the browser the full paths it
   // held to the rules for reading them (see call), and never what the caller wrote.
-  ['page.upload', false, 'Put files of a project (projectId; files by their paths in it) into a file field of the page (an <input type=file>, by ref, selector or text), as the owner choosing them would. The page may send them anywhere. The same rules hold as for reading them. The extension needs "Allow access to file URLs", which the owner switches on.',
+  ['page.upload', false, 'Put files of a project (projectId; files by their paths in it) into a file field of the page (an <input type=file>, by ref, selector or text), as the owner choosing them would. The page may send them anywhere. The same rules hold as for reading them. Where the browser refuses, the owner switches on "Allow access to file URLs" for the extension.',
     { tabId: tab, ...element, files: z.array(text(4096).min(1)).min(1).max(20).describe('Paths in the project, as workspace_read takes them.') }],
   ['page.select', false, 'Choose from a <select> list (by ref or selector): the choice by its value, or by label, the text it shows.', { tabId: tab, ref: element.ref, selector: element.selector, value: text(1000).min(1).optional(), label: text(1000).min(1).optional() }],
   ['page.scroll', false, 'Scroll an element into view (ref or selector), or the page by deltaY pixels.', { tabId: tab, ref: element.ref, selector: element.selector, deltaY: z.number().int().min(-100000).max(100000).optional() }],
@@ -389,7 +389,9 @@ export function createBrowserLink({ now = Date.now, idleMs = IDLE_MS, unheardMs 
     const answer = await new Promise((resolve, reject) => {
       // Whoever asked may give the call up. That is listened for until the call is answered and no longer: a caller at
       // this computer gives a signal that lasts as long as the runtime, and every call would stay with it, answer and all.
-      const cancelled = () => give(() => fault('cancelled', capability + ' was cancelled.'));
+      // One that was handed over is not called back: the browser may still do it (a run, its steps until its time is up).
+      const cancelled = () => give(waiting => fault('cancelled', capability + ' was cancelled.' + (waiting || definition.readOnly ? '' : ' It had been handed to the browser, which may still do it' +
+        (definition.method === 'page.run' ? ', step by step until the run\'s time is up' : '') + ': look before repeating it.')));
       const over = settle => value => { signal?.removeEventListener('abort', cancelled); settle(value); };
       // The link is the one the call waits on now: another one, when the first went away and the call could go elsewhere
       // (anywhere: it only looks, hands out no credentials, and names nothing that is one browser's own).

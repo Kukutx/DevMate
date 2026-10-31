@@ -119,6 +119,9 @@ const shop = () => tree([1, 'RootWebArea', 'Shop', { focusable: true }, [
 // (60, 40), with nothing in front of it.
 const shown = (more = {}) => ({ 'DOM.resolveNode': ({ backendNodeId }) => ({ object: { type: 'object', objectId: 'node-' + backendNodeId } }), 'DOM.getContentQuads': { quads: [[10, 20, 110, 20, 110, 60, 10, 60]] },
   'Runtime.callFunctionOn': { result: { type: 'object', subtype: 'null', value: null } }, ...more });
+// What an element's own document answers when asked what has the keyboard (page.type with ref or selector): the field
+// named so; nothing in front of it for any other question.
+const typedInto = field => ({ functionDeclaration }) => functionDeclaration.startsWith('function keyboard') ? { result: { type: 'string', value: field } } : { result: { type: 'object', subtype: 'null', value: null } };
 // What the browser is asked the first time the mouse or the keys are used on a tab while it is debugged: whether it
 // shows the tab, and to treat it as looked at (see the tests of a tab that is put away). After that, nothing more.
 const WOKEN = ['Runtime.evaluate', 'Emulation.setFocusEmulationEnabled'], LOOKED = { expression: 'document.visibilityState', awaitPromise: false, returnByValue: true, userGesture: false, timeout: 15000 };
@@ -129,7 +132,7 @@ const putAway = ({ wakes = true, more = {} } = {}) => {
   return { tab, replies: shown({ 'Emulation.setFocusEmulationEnabled': ({ enabled }) => { if (!enabled) tab.state = 'hidden'; else if (wakes) tab.state = 'visible'; },
     'Runtime.evaluate': ({ expression, returnByValue }) => expression === 'document.visibilityState' ? { result: { type: 'string', value: tab.state } } : returnByValue === false ? { result: { type: 'object', subtype: 'node', objectId: 'node-found' } }
       : { result: { type: 'string', value: 'input #name' } },
-    'Page.getLayoutMetrics': { cssVisualViewport: { clientWidth: 1000, clientHeight: 700 } }, 'Accessibility.getFullAXTree': shop(), ...more }) };
+    'Page.getLayoutMetrics': { cssVisualViewport: { clientWidth: 1000, clientHeight: 700 } }, 'Accessibility.getFullAXTree': shop(), 'Runtime.callFunctionOn': typedInto('input #name'), ...more }) };
 };
 
 test('the first call for a tab attaches the debugger, switches on what is watched, and says that the watching starts now', async () => {
@@ -500,7 +503,7 @@ test('an element is found by its ref from the snapshot, by a selector, or by the
   await refuses(methods['page.inspect']({ ref: 99 }), 'not_found', /^No element has the ref 99 any more\. Take a new page\.snapshot\.$/);
   await refuses(methods['page.inspect']({ ref: 14 }), 'not_found', /ref 14 any more/);
   await refuses(methods['page.inspect']({ selector: '##' }), 'invalid_input', /^The selector is not valid: SyntaxError: .* is not a valid selector\.$/);
-  const WAY_OUT = ' page\\.snapshot lists what is there with a ref for each, also inside a component that keeps its inside to itself\\. What is inside a frame \\(iframe\\) is not reached\\.$';
+  const WAY_OUT = ' page\\.snapshot lists what is there with a ref for each, also inside a component that keeps its inside to itself and inside a frame \\(iframe\\) of the same site: work those by ref\\. A selector and a text look in the page itself\\.$';
   await refuses(methods['page.inspect']({ selector: '#nothing' }), 'not_found', new RegExp('^No element on the page matches the selector #nothing\\.' + WAY_OUT));
   await refuses(methods['page.inspect']({ text: 'nothing like it' }), 'not_found', new RegExp('^No element on the page matches the text "nothing like it"\\.' + WAY_OUT));
   await refuses(methods['page.inspect'](), 'invalid_input', /^Say which element: ref \(its number in page\.snapshot\), selector, or the text it shows\.$/);
@@ -520,7 +523,17 @@ test('a ref is taken only on the tab and for the page whose snapshot gave it: no
   assert.deepEqual(await methods['page.click']({ ref: 13 }), { tabId: 1, clicked: { x: 60, y: 40 } });
   // A number the snapshot gave no line (a text has none) is not taken either, nor one of the snapshot of another tab.
   await refuses(methods['page.inspect']({ ref: 14 }), 'not_found', notGiven(14));
-  await refuses(methods['page.click']({ tabId: 2, ref: 13 }), 'not_found', notGiven(13));
+  const elsewhere = (ref, tabId) => new RegExp('^The ref ' + ref + ' was given by a page\\.snapshot of another tab \\(tabId ' + tabId + '\\), not of this one: name that tab with tabId, or take a page\\.snapshot of this one\\.$');
+  await refuses(methods['page.click']({ tabId: 2, ref: 13 }), 'not_found', elsewhere(13, 1));
+  // Another tab is given other numbers for its elements, though the browser numbers them alike: a ref taken from tab
+  // 1 does not reach the element of tab 2 that has the same number, also once tab 2 is the one in front.
+  const second = (await methods['page.snapshot']({ tabId: 2 })).text, other = Number(/\[(\d+)\] link "Home"/.exec(second)[1]);
+  assert.ok(other > 2 ** 30 && !/\[13\]/.test(second), second);
+  await refuses(methods['page.click']({ tabId: 2, ref: 13 }), 'not_found', elsewhere(13, 1));
+  await refuses(methods['page.click']({ ref: other }), 'not_found', elsewhere(other, 2));
+  assert.deepEqual(sent('DOM.resolveNode').filter(params => params.backendNodeId === 13).length, 1, 'only the click on tab 1 asked for the node');
+  assert.deepEqual(await methods['page.click']({ tabId: 2, ref: other }), { tabId: 2, clicked: { x: 60, y: 40 } });
+  assert.deepEqual(sent('DOM.resolveNode').at(-1), { backendNodeId: 13 }, 'the number tab 2 was given stands for its own element');
   // A frame inside the page that goes elsewhere leaves the page as it was.
   say(1, 'Page.frameNavigated', { frame: { id: 'inner', parentId: 'main', url: 'https://ads.example/' } });
   assert.equal((await methods['page.inspect']({ ref: 13 })).tabId, 1);
@@ -536,7 +549,7 @@ test('a ref is taken only on the tab and for the page whose snapshot gave it: no
   // it was given by none.
   await refuses(methods['page.inspect']({ ref: 19 }), 'not_found', /has changed since the page\.snapshot that gave the ref 19/);
   await methods['page.snapshot']({ tabId: 3, maxNodes: 10 });
-  await refuses(methods['page.inspect']({ tabId: 3, ref: 19 }), 'not_found', notGiven(19));
+  await refuses(methods['page.inspect']({ tabId: 3, ref: 19 }), 'not_found', elsewhere(19, 1));
   // The page may go elsewhere while the browser is asked which node a ref is: the answer is then of the next page.
   await methods['page.snapshot']();
   replies['DOM.resolveNode'] = ({ backendNodeId }) => { say(1, 'Page.frameNavigated', { frame: { id: 'main', url: 'https://app.example/elsewhere' } }); return { object: { type: 'object', objectId: 'next-page-' + backendNodeId } }; };
@@ -769,6 +782,11 @@ test('page.run stops before a step once the owner has paused the browser, once t
   const off = await methods['page.run']({ steps: [{ method: 'page.snapshot' }, { method: 'page.press', input: { key: 'Enter' } }] });
   assert.deepEqual([off.failed, off.steps[1].error.code], [2, 'browser_error']); assert.match(off.steps[1].error.message, /^The debugger was taken off this tab while the run went on/);
   assert.equal(stand.log.filter(call => call.method === 'attach').length, attached, 'and it was not put on again');
+  // Also where the first step is what put the debugger on the tab: tab 2 has not had it before.
+  stand.replies['Accessibility.getFullAXTree'] = () => { stand.drop(2); return shop(); };
+  const fresh = await methods['page.run']({ tabId: 2, steps: [{ method: 'page.snapshot' }, { method: 'page.press', input: { key: 'Enter' } }] });
+  assert.deepEqual([fresh.failed, fresh.steps[1].error.code], [2, 'browser_error']);
+  assert.equal(stand.log.filter(call => call.method === 'attach').length, attached + 1, 'put on by the first step, and not again');
   stand.replies['Accessibility.getFullAXTree'] = shop();
   // A run that takes longer than five minutes stops before its next step.
   stand.replies['Accessibility.getFullAXTree'] = () => { time.now += 5 * 60 * 1000 + 1; return shop(); };
@@ -843,26 +861,28 @@ test('page.click refuses an element that is not shown, and one with something el
 });
 
 test('page.type gives the element the keyboard, empties it when asked the way a person does, and types the text', async () => {
-  const { methods, names, sent, listed } = harness(shown({ 'Runtime.evaluate': ({ returnByValue }) => returnByValue === false ? { result: { type: 'object', subtype: 'node', objectId: 'node-found' } } : { result: { type: 'string', value: 'input[text] name' } } }));
+  const { methods, names, sent, listed } = harness(shown({ 'Runtime.evaluate': ({ returnByValue }) => returnByValue === false ? { result: { type: 'object', subtype: 'node', objectId: 'node-found' } } : { result: { type: 'string', value: 'input[text] name' } },
+    'Runtime.callFunctionOn': typedInto('input[text] name') }));
   await listed();
   assert.deepEqual(await methods['page.type']({ ref: 13, text: 'Ada', clear: true }), { tabId: 1, typed: 3, into: 'input[text] name', untrusted: true });
-  assert.deepEqual(names(5), ['DOM.resolveNode', ...WOKEN, 'DOM.focus', 'Runtime.evaluate', 'Input.dispatchKeyEvent', 'Input.dispatchKeyEvent', 'Input.insertText']);
+  assert.deepEqual(names(5), ['DOM.resolveNode', ...WOKEN, 'DOM.focus', 'Runtime.callFunctionOn', 'Input.dispatchKeyEvent', 'Input.dispatchKeyEvent', 'Input.insertText']);
   assert.deepEqual(sent('DOM.focus'), [{ objectId: 'node-13' }]);
-  // The page is asked what has the keyboard and, to empty it, to select what is in it. Then Delete is pressed.
-  const [looked, { expression, ...asked }] = sent('Runtime.evaluate');
-  assert.deepEqual(looked, LOOKED);
-  assert.match(expression, /^\(function keyboard\(clear\) \{[^]*\}\)\(true\)$/);
-  assert.deepEqual(asked, { awaitPromise: false, returnByValue: true, userGesture: false, timeout: 15000 });
+  // The element's own document is asked what has the keyboard (in a frame, the frame's: the page itself only knows that
+  // the frame has it) and, to empty it, to select what is in it. Then Delete is pressed.
+  const [{ functionDeclaration, ...asked }] = sent('Runtime.callFunctionOn');
+  assert.match(functionDeclaration, /^function keyboard\(clear\) \{/);
+  assert.deepEqual(asked, { objectId: 'node-13', arguments: [{ value: true }], returnByValue: true, userGesture: false });
+  assert.deepEqual(sent('Runtime.evaluate'), [LOOKED]);
   const key = { key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46, modifiers: 0 };
   assert.deepEqual(sent('Input.dispatchKeyEvent'), [{ type: 'rawKeyDown', ...key }, { type: 'keyUp', ...key }]);
   assert.deepEqual(sent('Input.insertText'), [{ text: 'Ada' }]);
   // Without clear, what is there stays and nothing is selected.
   let from = names().length;
   assert.deepEqual(await methods['page.type']({ selector: '#name', text: ' Lovelace' }), { tabId: 1, typed: 9, into: 'input[text] name', untrusted: true });
-  assert.deepEqual(names(from), ['Runtime.evaluate', 'DOM.focus', 'Runtime.evaluate', 'Input.insertText']);
+  assert.deepEqual(names(from), ['Runtime.evaluate', 'DOM.focus', 'Runtime.callFunctionOn', 'Input.insertText']);
   assert.deepEqual(sent('DOM.focus')[1], { objectId: 'node-found' });
-  assert.match(sent('Runtime.evaluate').at(-1).expression, /^\(function keyboard\(clear\) \{[^]*\}\)\(false\)$/);
-  for (const clear of [false, 'true', 1]) { await methods['page.type']({ text: 'x', clear }); assert.match(sent('Runtime.evaluate').at(-1).expression, /\}\)\(false\)$/, 'only the value true means it'); }
+  assert.deepEqual(sent('Runtime.callFunctionOn').at(-1).arguments, [{ value: false }]);
+  for (const clear of [false, 'true', 1]) { await methods['page.type']({ text: 'x', clear }); assert.match(sent('Runtime.evaluate').at(-1).expression, /^\(function keyboard\(clear\) \{[^]*\}\)\(false\)$/, 'only the value true means it'); }
   // With no element named, the text goes where the keyboard already is.
   from = names().length;
   await methods['page.type']({ text: 'more' });
@@ -870,7 +890,7 @@ test('page.type gives the element the keyboard, empties it when asked the way a 
   // No text and clear is how a field is emptied.
   from = names().length;
   assert.deepEqual(await methods['page.type']({ ref: 13, text: '', clear: true }), { tabId: 1, typed: 0, into: 'input[text] name', untrusted: true });
-  assert.deepEqual(names(from), ['DOM.resolveNode', 'DOM.focus', 'Runtime.evaluate', 'Input.dispatchKeyEvent', 'Input.dispatchKeyEvent']);
+  assert.deepEqual(names(from), ['DOM.resolveNode', 'DOM.focus', 'Runtime.callFunctionOn', 'Input.dispatchKeyEvent', 'Input.dispatchKeyEvent']);
 });
 
 test('page.type refuses when nothing has the keyboard, and when the element named cannot take it', async () => {
@@ -1982,7 +2002,7 @@ test('what is answered when a dialog cuts a call short is what was done: nothing
   await settle(); dialog(hover);
   assert.deepEqual(await hovering, { tabId: 1, hovered: { x: 60, y: 40 }, ...named });
   // The field was being emptied when its page asked: the text was not typed, and the answer says 0 characters.
-  const keys = [], form = harness(shown({ 'Input.dispatchKeyEvent': () => new Promise(resolve => keys.push(resolve)), 'Runtime.evaluate': seen }));
+  const keys = [], form = harness(shown({ 'Input.dispatchKeyEvent': () => new Promise(resolve => keys.push(resolve)), 'Runtime.evaluate': seen, 'Runtime.callFunctionOn': typedInto('input #name') }));
   await form.listed();
   const typing = form.methods['page.type']({ ref: 13, text: 'Ada', clear: true });
   await settle(); dialog(form);
@@ -2451,6 +2471,11 @@ test('page.snapshot lists what a frame of the same site holds under it, with ref
     'Accessibility.getFullAXTree': ({ frameId } = {}) => frameId ? tree([1000 + Number(frameId.slice(1)), 'RootWebArea', '', {}, [[2000 + Number(frameId.slice(1)), 'button', 'In ' + frameId]]]) : tree([1, 'RootWebArea', '', {}, Array.from({ length: 12 }, (_, at) => [at + 2, 'Iframe', ''])]) });
   const crowd = (await many.methods['page.snapshot']()).text;
   assert.equal((crowd.match(/button "In F/g) || []).length, 10); assert.equal(many.sent('Accessibility.getFullAXTree').length, 11);
+  // Frames of another site have an id too, and no tree here: eleven of them before one of the same site do not use up
+  // the ten.
+  const ads = harness({ 'DOM.describeNode': ({ backendNodeId }) => ({ node: { frameId: 'F' + backendNodeId, attributes: [] } }),
+    'Accessibility.getFullAXTree': ({ frameId } = {}) => frameId === 'F13' ? tree([1013, 'RootWebArea', '', {}, [[2013, 'button', 'Pay']]]) : frameId ? no('Frame with the given id was not found.') : tree([1, 'RootWebArea', '', {}, Array.from({ length: 12 }, (_, at) => [at + 2, 'Iframe', ''])]) });
+  assert.match((await ads.methods['page.snapshot']()).text, /\[13\] frame \(another page inside this one: what it holds is listed under it\)\n {2}\[2013\] button "Pay"/);
 });
 
 test('page.snapshot shows a frame of the page with the address of the page inside it, named or not, and says that its inside is not listed', async () => {

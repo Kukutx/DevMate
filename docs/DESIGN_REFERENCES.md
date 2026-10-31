@@ -1,6 +1,6 @@
 # DevMate design references
 
-Reviewed on 2026-10-06, 2026-10-07, 2026-10-09, 2026-10-11 and 2026-10-12. The current implementation is the DevMate 4 local runtime, fresh SQLite state, explicit capability composition and shared workbench described in the [README](../README.md). What is not done yet and what could not be verified is in [STATUS.md](STATUS.md).
+Reviewed on 2026-10-06, 2026-10-07, 2026-10-09, 2026-10-11, 2026-10-12 and 2026-10-30. The current implementation is the DevMate 4 local runtime, fresh SQLite state, explicit capability composition and shared workbench described in the [README](../README.md). What is not done yet and what could not be verified is in [STATUS.md](STATUS.md).
 
 ## Official protocols and UI
 
@@ -41,7 +41,23 @@ DevMate shares the starting point (the owner's machine, the owner's route, folde
 
 Reviewed from its README. A local MCP server for ChatGPT's developer mode with a guarded patch tool, allow-listed commands and handoff plans. On a public tunnel it requires a token of at least 24 bytes, which travels in the server address because ChatGPT offers no other place for it without OAuth.
 
-DevMate's quick tunnel follows the same reasoning: with no sign-in possible, the address ends in a random key of 24 bytes that is new with every start, and the host name alone opens nothing.
+DevMate's quick tunnel follows the same reasoning: with no sign-in possible, the address ends in a random key of 24 bytes, made once and kept with the instance until the owner asks for a new address, and the host name alone opens nothing.
+
+## The browser and the windows of the computer
+
+Reviewed on 2026-10-30, at the owner's request, for how Claude Code, Codex and the web clients work the owner's browser and the computer itself, together with the projects among the owner's GitHub stars that do this.
+
+[Windows-MCP](https://github.com/CursorTouch/Windows-MCP), from its README. It reads the desktop through UI Automation into a snapshot whose elements have numbers, pictures the screen, and acts with clicks at screen coordinates, typing, scrolling, key shortcuts, moving and launching windows, besides PowerShell, files, the registry and the clipboard. DevMate takes the reading: the windows as the taskbar lists them, one window's controls numbered as accessibility tools read them, and a picture of a window or the screen (`desktop.*`). It does not take the input. A click at a place or a typed key goes to whatever is in front at that moment, on the screen the owner is working at, and Windows-MCP itself says that handing control back to the person is best effort and not a security boundary. DevMate acts on one control through the control itself instead (press, tick, choose, replace a field's text), only in programs the owner names, never in a terminal, an editor, a browser or an assistant. Its files, commands and processes DevMate already has under its own rules.
+
+[WebMCP](https://github.com/webmachinelearning/webmcp): a page that declares tools of its own (`navigator.modelContext`) has them listed and called through the extension (`page.tools`, `page.callTool`), so a client uses what the site offers instead of clicking through it. Tried in Chrome with its experimental switch on a test page.
+
+[Playwright](https://github.com/microsoft/playwright) and its MCP server: an element is named by a reference from the latest snapshot of the page, a snapshot can be of a part of the page, and a picture can be of one element. DevMate's references are bound to the tab and the page they were read from, and are refused once that page is gone (`page.snapshot`, `page.screenshot`).
+
+[browser-use](https://github.com/browser-use/browser-use): several actions in one turn of the model instead of one round trip each. DevMate's `page.run` takes up to 30 steps on one tab in one call and stops at the first that fails.
+
+webcmd (agentrhq/webcmd), read at the owner's request on 2026-10-20: running a whole exploration as one program is what `page.run` covers. Its memory of a site's structure, checked against the live page before it is used, is not taken: it is a proposal the owner has not chosen.
+
+Also looked at among the stars, and not taken: [trycua/cua](https://github.com/trycua/cua) (computer use in virtual machines and sandboxes; DevMate works on the owner's own desktop) and [Sylinko/Everywhere](https://github.com/Sylinko/Everywhere) (an assistant of its own that reads the screen; DevMate gives that to the owner's existing clients).
 
 ## ThreadCrew
 

@@ -607,7 +607,7 @@ export async function main(argv = process.argv.slice(2), {
       const chosen = profile ? await client.call('access.update', { profile }, callOptions) : await client.call('access.read', {}, callOptions);
       stdout.write(chosen.profile + '\n');
       stderr.write(chosen.profile === 'full'
-        ? 'Full access: a client connected as the owner can share folders, read credential files, set up engines and answer agents; what a delegated agent asks permission for is granted automatically. Back to the default: devmate access guarded\n'
+        ? 'Full access: a client connected as the owner can share folders, read credential files, set up engines, answer agents and, on Windows, read the windows on your screen; what a delegated agent asks permission for is granted automatically. Back to the default: devmate access guarded\n'
         : 'Guarded: you share folders, lift credential-file protection and answer agents at this computer. To hand all of that to your connected client: devmate access full\n');
       return 0;
     }

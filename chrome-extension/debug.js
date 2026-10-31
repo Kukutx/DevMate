@@ -13,6 +13,9 @@ export const DEBUG_READ_ONLY = Object.freeze(['page.console', 'page.network', 'p
 const IDLE_MS = 5 * 60 * 1000, KEPT = 500;
 // How many of the refs the snapshots of one page gave are taken: the latest ones.
 const REFS_KEPT = 20000;
+// How many refs are remembered as given on a tab, so that no other tab is given the same number; and where the numbers
+// begin that are given instead (see numbered in page.snapshot), far above those a browser gives its elements.
+const ISSUED_KEPT = 200000, FRESH_FROM = 2 ** 30;
 // Of how many frames of a page a snapshot lists what they hold.
 const FRAMES_READ = 10;
 // How long a tab is given to answer the first thing the debugger asks of it (see open()).
@@ -291,8 +294,11 @@ const inPage = (work, ...given) => '(' + work + ')(' + given.map(value => JSON.s
  * are passed in so that tests can run without waiting. onChange tells the panel which tabs are being debugged.
  */
 export function createDebugger(chrome, { target, clock = () => Date.now(), schedule = (run, ms) => setTimeout(run, ms), cancel = clearTimeout, pause = ms => new Promise(resolve => setTimeout(resolve, ms)), onChange = () => {} } = {}) {
-  const sessions = new Map(), opening = new Map();
-  let listening = false;
+  const sessions = new Map(), opening = new Map(), opened = new Map();
+  // issued: the tab each ref was given on. A number given on one tab is not given on another, so a ref taken from the
+  // snapshot of one tab cannot name an element of another (the tab in front, which may have changed meanwhile).
+  const issued = new Map();
+  let listening = false, unused = FRESH_FROM;
   const raw = (tabId, method, params = {}) => chrome.debugger.sendCommand({ tabId }, method, params);
   const command = (tabId, method, params) => raw(tabId, method, params).catch(error => { throw fail('browser_error', method + ' failed: ' + said(error)); });
   const dialogOf = session => session.dialog.type + ': ' + JSON.stringify(cut(session.dialog.message, 300));
@@ -362,10 +368,12 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       throw fail('browser_error', /cannot access|chrome:|chrome-extension:|web store/i.test(said(error)) ? 'The browser does not let a page of its own, or of the Web Store, be debugged.' : 'The browser did not attach the debugger to this tab (' + said(error) + ').');
     });
     // Each of the two lists counts what it lost itself, once it is full.
-    // page counts the pages the tab has gone to while it is debugged; refs are those the snapshots of one of them gave.
+    // page counts the pages the tab has gone to while it is debugged; refs are those the snapshots of one of them gave,
+    // each with the element it names (ids), and those of the page before.
     const session = { tabId, seq: 0, since: clock(), console: Object.assign([], { dropped: 0 }), requests: Object.assign([], { dropped: 0 }), byId: new Map(), waiters: new Set(), dialog: null, timer: null, awake: false, waking: null, put: false, undrawn: false, lent: 0,
-      page: 0, refs: { page: 0, ids: new Set(), before: new Set() } };
+      page: 0, refs: { page: 0, ids: new Map(), before: new Map() } };
     sessions.set(tabId, session);
+    opened.set(tabId, (opened.get(tabId) || 0) + 1);
     try {
       // A page that was showing a dialog before the debugger came answers nothing, and that dialog cannot be answered
       // through the debugger: the browser says none is showing (seen in a real Chrome). So the first thing asked of
@@ -496,13 +504,14 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   // else: such a ref would reach another element than the one that was listed.
   async function element(id, { ref, selector, text: shown }) {
     if (ref !== undefined) {
-      const wanted = whole(ref, 'ref', { min: 1 }), session = sessions.get(id);
+      const wanted = whole(ref, 'ref', { min: 1 }), session = sessions.get(id), node = session?.refs.ids.get(wanted), elsewhere = issued.get(wanted);
       // The page went elsewhere before this snapshot: its refs are kept as those of the page before, to say so.
       const changed = () => fail('not_found', 'The page in this tab has changed since the page.snapshot that gave the ref ' + ref + ': it went to another address or was loaded again, and its elements are others now. Take a new page.snapshot.');
-      if (!session?.refs.ids.has(wanted) && session?.refs.before.has(wanted)) throw changed();
-      if (!session?.refs.ids.has(wanted)) throw fail('not_found', 'No page.snapshot of this tab has given the ref ' + ref + '. A ref belongs to the tab and the page whose snapshot listed it: take a page.snapshot of this tab and use a ref from it. (Refs are kept while the tab is debugged; it is let go after five minutes without a call.)');
+      if (node === undefined && session?.refs.before.has(wanted)) throw changed();
+      if (node === undefined && elsewhere !== undefined && elsewhere !== id) throw fail('not_found', 'The ref ' + ref + ' was given by a page.snapshot of another tab (tabId ' + elsewhere + '), not of this one: name that tab with tabId, or take a page.snapshot of this one.');
+      if (node === undefined) throw fail('not_found', 'No page.snapshot of this tab has given the ref ' + ref + '. A ref belongs to the tab and the page whose snapshot listed it: take a page.snapshot of this tab and use a ref from it. (Refs are kept while the tab is debugged; it is let go after five minutes without a call.)');
       if (session.refs.page !== session.page) throw changed();
-      const found = await raw(id, 'DOM.resolveNode', { backendNodeId: wanted }).catch(() => null);
+      const found = await raw(id, 'DOM.resolveNode', { backendNodeId: node }).catch(() => null);
       // The page may have gone elsewhere while the browser was asked: the number then names a node of the next page.
       if (session.refs.page !== session.page) { if (found?.object?.objectId) void raw(id, 'Runtime.releaseObject', { objectId: found.object.objectId }).catch(() => {}); throw changed(); }
       if (!found?.object?.objectId) throw fail('not_found', 'No element has the ref ' + ref + ' any more. Take a new page.snapshot.');
@@ -514,7 +523,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     if (answer.exceptionDetails) throw fail('invalid_input', 'The selector is not valid: ' + cut(answer.exceptionDetails.exception?.description || answer.exceptionDetails.text, 300));
     // A text is looked for in the page and in the components that show their inside, a selector in the page alone.
     if (!answer.result?.objectId) throw fail('not_found', 'No element on the page matches ' + (selector !== undefined ? 'the selector ' + selector : 'the text "' + shown + '"') +
-      '. page.snapshot lists what is there with a ref for each, also inside a component that keeps its inside to itself. What is inside a frame (iframe) is not reached.');
+      '. page.snapshot lists what is there with a ref for each, also inside a component that keeps its inside to itself and inside a frame (iframe) of the same site: work those by ref. A selector and a text look in the page itself.');
     return answer.result.objectId;
   }
   // The middle of an element as it is drawn (of its first box), where it has one.
@@ -596,7 +605,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       const most = Math.min(1500, whole(maxNodes, 'maxNodes', { optional: true, min: 10 }) ?? 300), wanted = query === '' ? undefined : text(query, 'query', { optional: true, max: 200 });
       const { id, tab, session } = await page(tabId), listed = session.page;
       // The element whose part of the page is asked for, by the number the browser gives it (as a ref is).
-      const part = ref !== undefined ? (await element(id, { ref }), ref) : selector !== undefined ? (await raw(id, 'DOM.describeNode', { objectId: await element(id, { selector }) }).catch(() => null))?.node?.backendNodeId : undefined;
+      const part = ref !== undefined ? (await element(id, { ref }), session.refs.ids.get(ref)) : selector !== undefined ? (await raw(id, 'DOM.describeNode', { objectId: await element(id, { selector }) }).catch(() => null))?.node?.backendNodeId : undefined;
       if (selector !== undefined && part === undefined) throw fail('not_found', 'The browser did not say which element the selector ' + selector + ' found. Name it by its ref from page.snapshot.');
       await raw(id, 'Accessibility.enable').catch(() => {});
       const { nodes } = await command(id, 'Accessibility.getFullAXTree'), byId = new Map(nodes.map(node => [node.nodeId, node]));
@@ -624,10 +633,20 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
         frames.set(node, address);
         if (told?.frameId) framesOf.set(node, told.frameId);
       }));
-      for (const node of framed.filter(one => framesOf.has(one)).slice(0, FRAMES_READ)) {
+      // A frame of another site has an id too, but no tree here: only those whose tree came back count.
+      for (const node of framed.filter(one => framesOf.has(one))) {
+        if (inside.size >= FRAMES_READ) break;
         const held = (await raw(id, 'Accessibility.getFullAXTree', { frameId: framesOf.get(node) }).catch(() => null))?.nodes;
         if (Array.isArray(held) && held.length) inside.set(node, { byId: new Map(held.map(one => [one.nodeId, one])), root: held.find(one => !one.parentId) || held[0], nodes: held });
       }
+      // The ref an element is listed by: the number the browser gives it, unless another tab was given that number (the
+      // pages of every tab number their elements alike), then one that no tab was given. One this page was given stays.
+      const current = session.refs.page === listed ? session.refs.ids : new Map(), refOf = new Map([...current].map(([one, node]) => [node, one])), nodeOf = new Map();
+      const numbered = node => {
+        if (!refOf.has(node)) refOf.set(node, issued.has(node) && issued.get(node) !== id ? ++unused : node);
+        nodeOf.set(refOf.get(node), node);
+        return refOf.get(node);
+      };
       // The lines of a node and of what it holds.
       // ids: the tree the node is of (the page's own, or that of a frame).
       const walk = (node, depth, above, ids = byId) => {
@@ -642,7 +661,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
         if (!shown || (!name && !said && !INTERACTIVE.has(role) && !frame && !below.length)) return below;
         const properties = node.properties || [], states = properties.filter(item => STATES.includes(item.name) && item.value?.value && item.value.value !== 'false').map(item => item.name + (item.value.value === true || item.value.value === 'true' ? '' : '=' + item.value.value));
         const address = role === 'link' ? properties.find(item => item.name === 'url')?.value?.value : frames.get(node) || undefined;
-        return ['  '.repeat(Math.min(depth, 12)) + (node.backendDOMNodeId && role !== 'StaticText' ? '[' + node.backendDOMNodeId + '] ' : '') + (role === 'StaticText' ? 'text' : frame ? 'frame' : role) + (name ? ' "' + name + '"' : '') +
+        return ['  '.repeat(Math.min(depth, 12)) + (node.backendDOMNodeId && role !== 'StaticText' ? '[' + numbered(node.backendDOMNodeId) + '] ' : '') + (role === 'StaticText' ? 'text' : frame ? 'frame' : role) + (name ? ' "' + name + '"' : '') +
           (said ? ' value="' + cut(value, 120) + '"' : '') + (address ? ' → ' + cut(address, 200) : '') + (states.length ? ' (' + states.join(', ') + ')' : '') + (frame ? held ? ' (another page inside this one: what it holds is listed under it)' : ' (another page inside this one: what it holds is not listed here)' : ''), ...below];
       };
       // The element asked for may be in a frame of the page as well.
@@ -655,9 +674,15 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       // The refs it gives are taken from now on, on this tab and for this page (see element). A page that went away
       // while it was read gives none.
       if (session.page === listed) {
-        if (session.refs.page !== listed) session.refs = { page: listed, ids: new Set(), before: session.refs.ids };
-        for (const one of given) { const number = /^ *\[(\d+)\]/.exec(one)?.[1]; if (number) { session.refs.ids.delete(Number(number)); session.refs.ids.add(Number(number)); } }
-        for (const old of session.refs.ids) { if (session.refs.ids.size <= REFS_KEPT) break; session.refs.ids.delete(old); }
+        if (session.refs.page !== listed) session.refs = { page: listed, ids: new Map(), before: session.refs.ids };
+        for (const one of given) {
+          const number = Number(/^ *\[(\d+)\]/.exec(one)?.[1]);
+          if (!nodeOf.has(number)) continue;
+          session.refs.ids.delete(number); session.refs.ids.set(number, nodeOf.get(number));
+          issued.delete(number); issued.set(number, id);
+        }
+        for (const old of session.refs.ids.keys()) { if (session.refs.ids.size <= REFS_KEPT) break; session.refs.ids.delete(old); }
+        for (const old of issued.keys()) { if (issued.size <= ISSUED_KEPT) break; issued.delete(old); }
       }
       return { tabId: id, title: tab.title || '', url: tab.url || '', text: given.join('\n'), nodes: given.length, ...(wanted !== undefined ? { query: wanted, matched: kept.length } : {}),
         ...(kept.length > most ? { truncated: true, leftOut: kept.length - most } : {}), untrusted: true };
@@ -734,7 +759,9 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
         if (halted()) return;
         if (objectId) await raw(id, 'DOM.focus', { objectId }).catch(() => { throw fail('invalid_input', 'This element cannot take the keyboard: it is not something to type into.'); });
         if (halted()) return;
-        into = (await run(id, inPage(keyboard, clear === true))).value;
+        // A named element is asked in its own document, where the keyboard is with it: in a frame's, for one in a frame
+        // (the page itself only knows that the frame has it).
+        into = objectId ? await onElement(id, objectId, keyboard, clear === true) : (await run(id, inPage(keyboard, clear === true))).value;
         if (!into) throw fail('invalid_input', 'Nothing on the page has the keyboard. Say where to type: ref or selector.');
         // Emptied the way a person empties a field: everything selected, then deleted.
         if (clear === true && !halted()) { did(); await press(id, 'Delete'); }
@@ -922,5 +949,6 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     }
   }
 
-  return { methods, capture, release, debugging: () => [...sessions.keys()] };
+  // opened: how often the debugger was put on a tab, so that a run can tell it was taken off and put on again.
+  return { methods, capture, release, debugging: () => [...sessions.keys()], opened: tabId => opened.get(tabId) || 0 };
 }

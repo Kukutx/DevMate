@@ -21,7 +21,7 @@ A capability is `<engine>.<name>`.
 | `reverse` | `reverse.*` | the runtime, optionally starting Python, Rizin/radare2 and Ghidra |
 | `obsidian` | `obsidian.*` | the Obsidian plugin of an attached vault |
 | `chrome` | `chrome.*`: the owner's own browser (bookmarks, tabs, windows, history, downloads, the reading list) and `chrome.page.*`, which debugs a page like DevTools | the DevMate extension in Chrome or Edge, through the program the browser starts for it |
-| `desktop` | `desktop.*`: the windows open on the owner's computer, the controls of one, and a picture of a window or of the screen, once the owner has switched it on at the computer (or with full access); `desktop.act` acts on one control in the programs the owner named | the runtime, through the Windows PowerShell that comes with Windows (Windows only for now) |
+| `desktop` | `desktop.*`: the windows open on the owner's computer, the controls of one, and a picture of a window or of the screen, once the owner has switched it on at the computer (or with full access, unless the owner switched it off); `desktop.act` acts on one control in the programs the owner named | the runtime, through the Windows PowerShell that comes with Windows (Windows only for now) |
 
 Configured external MCP servers are reached as `mcp.<serverId>.<operation>`.
 
@@ -67,12 +67,12 @@ Persistent processes started by an engine (`godot.run`) are ordinary project pro
 Every caller is the owner, at their computer or through a connected client. Some capabilities reach further than the project's files, and a connected client has them like any other:
 
 - all of `chrome.*`, which reaches furthest: the owner's own browser, signed in wherever the owner is. Its bookmarks, history and downloads, and with `chrome.page.*` any page open in it, are read and worked as the owner. It belongs to no project and no project's protection holds anything of it back; the owner connects it (`devmate chrome install`) and can pause it in the extension;
-- all of `desktop.*`, once the owner has switched it on at the computer or chosen full access: whatever is on the owner's screen, in any program, is read and pictured; it belongs to no project, and it clicks and types nowhere;
+- all of `desktop.*`, once the owner has switched it on at the computer or chosen full access: whatever is on the owner's screen, in any program, is read and pictured; it belongs to no project. `desktop.act` acts in the programs the owner named, as the owner, through the controls themselves (no mouse, no keyboard), never in the window where a program asks where to save a file or which to open;
 - all of `browser-control.*`: a session is a browser on the owner's desktop and may hold a signed-in persistent profile;
 - `reverse.code_analyze`, `reverse.decompile`, `reverse.disassemble`: they start installed analysis programs;
 - everything under `mcp.*`: an external server has credentials and resources of its own.
 
-Two things stay at the owner's computer unless the owner chose the full access profile: setting an engine up (`capability.configure`, `godot.quick_setup`), and, in either profile, switching on the `reverse.*` capabilities that read or write the memory of a local process (`allowProcessAccess`, `allowMemoryWrite`).
+Two things stay at the owner's computer unless the owner chose the full access profile: setting an engine up (`capability.configure`, `godot.quick_setup`), and, in either profile, switching on the `reverse.*` capabilities that read or write the memory of a local process (`allowProcessAccess`, `allowMemoryWrite`). The windows of the computer are widened at the owner's computer in either profile as well: switching reading on and naming programs to act in.
 
 ## Engine settings
 
@@ -83,7 +83,7 @@ Settings are layered, later wins:
 3. instance-wide values set with `capability.configure`;
 4. values for one project (set by `godot.quick_setup`, or `capability.configure` with a `projectId`).
 
-`engineSettings` is validated when the runtime starts. An unknown engine id or an unknown or invalid key stops the start with a message naming the engine and the key. Engine ids are `automation`, `browser-control`, `browser-qa`, `godot`, `reverse`, `obsidian`. `chrome` is not among them: it has no settings, and `capability.configure` does not know it.
+`engineSettings` is validated when the runtime starts. An unknown engine id or an unknown or invalid key stops the start with a message naming the engine and the key. Engine ids are `automation`, `browser-control`, `browser-qa`, `godot`, `reverse`, `obsidian`. `chrome` is not among them: it has no settings, and `capability.configure` does not know it. Nor is `desktop`: its two settings, `enabled` (true, false, or null for no choice, which reads with full access only) and `apps` (the programs acted in, by name without .exe), are kept with the instance and set with `capability.configure` `{"engine":"desktop","settings":{...}}` at the owner's computer; a connected client can only switch reading off and take programs out.
 
 ```json
 { "engineSettings": { "godot": { "executablePath": "C:\\Tools\\Godot\\godot.exe" }, "reverse": { "enabled": false } } }

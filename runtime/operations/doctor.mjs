@@ -2,6 +2,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createChromeRegistration } from '../platform/chrome-registration.mjs';
 import { createClientRegistration } from '../platform/client-registration.mjs';
+import { SWITCH_OFF } from '../desktop.mjs';
 import { findOnPath, installHint, resolveTool, startable } from '../platform/tools.mjs';
 import { VERSION } from '../version.mjs';
 import { TUNNEL_HELP } from '../openai-tunnel.mjs';
@@ -195,7 +196,8 @@ export async function doctor(service) {
   } catch { /* a settings file that cannot be read is said by devmate client */ }
   // Full access is a choice, not a fault. Without sign-in on a public route it is everyone's who learns the address.
   if (service.fullAccess()) check('access', url && service.config.auth.mode === 'none' ? 'warn' : 'info',
-    'Full access: a client connected as the owner can share folders, read credential files and answer agents, and agent permission requests are granted automatically.' +
+    'Full access: a client connected as the owner can share folders, read credential files and answer agents' +
+      (service.desktop.reading() ? ', and read the windows on this screen (switched off alone with: ' + SWITCH_OFF + ')' : '') + ', and agent permission requests are granted automatically.' +
       (url && service.config.auth.mode === 'none' ? ' The public URL has no sign-in, so that is anyone who learns it.' : ''),
     'Back to the default with: devmate access guarded (or "Change Permission Profile" in the editor).');
   else check('access', 'ok', 'Guarded: sharing folders, credential files and agent approvals stay with you at this computer.');
