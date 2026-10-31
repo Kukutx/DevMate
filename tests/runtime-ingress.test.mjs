@@ -376,10 +376,16 @@ test('the ingress answers a quick tunnel only under the address the tunnel holds
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-ingress-'));
   const instanceRoot = path.join(temp, 'instance'); fs.mkdirSync(instanceRoot);
   fs.writeFileSync(path.join(instanceRoot, 'config.json'), JSON.stringify({ connection: { kind: 'cloudflare-quick', executable: process.execPath } }));
+  // Claude Code has DevMate among its servers, added with a Node that is gone since: the doctor says so. (Where the
+  // clients keep their settings is a folder of this test.)
+  const places = ['APPDATA', 'LOCALAPPDATA', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME'], before = Object.fromEntries(places.map(name => [name, process.env[name]]));
+  for (const name of places) process.env[name] = temp;
+  fs.writeFileSync(path.join(temp, '.claude.json'), JSON.stringify({ mcpServers: { devmate: { command: path.join(temp, 'gone', 'node.exe'), args: [path.join(instanceRoot, 'clients', 'devmate-mcp.mjs')] } } }));
   let address = null, keyPath = null;
+  const since = '2026-10-31T00:00:00.000Z';
   const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: ({ localMcpUrl }) => { keyPath = new URL(localMcpUrl).pathname; return { async start() {}, async stop() {}, publicUrl: () => address,
-    status() { return { kind: 'cloudflare-quick', phase: address ? 'connected' : 'connecting', ...(address ? { publicUrl: address } : {}), remoteMcpVerified: false }; } }; } });
-  t.after(async () => { await runtime.stop(); fs.rmSync(temp, { recursive: true, force: true }); });
+    status() { return { kind: 'cloudflare-quick', phase: address ? 'connected' : 'connecting', ...(address ? { publicUrl: address, addressSince: since, adopted: true } : {}), remoteMcpVerified: false }; } }; } });
+  t.after(async () => { await runtime.stop(); for (const name of places) if (before[name] === undefined) delete process.env[name]; else process.env[name] = before[name]; fs.rmSync(temp, { recursive: true, force: true }); });
   assert.ok(runtime.ingressPort, 'the ingress listens before the address is known');
   // The host name of a quick tunnel is visible to anyone who watches DNS. What opens the endpoint is the rest of the address.
   assert.match(keyPath, /^\/mcp\/[A-Za-z0-9_-]{32}$/);
@@ -402,6 +408,9 @@ test('the ingress answers a quick tunnel only under the address the tunnel holds
   const doctor = await runtime.service.call('runtime.doctor', {}, { id: 'owner', surface: 'local' });
   const named = id => doctor.checks.find(item => item.id === id);
   assert.equal(named('connection.address').status, 'info'); assert.match(named('connection.address').detail, /stays across restarts and updates of DevMate/); assert.match(named('connection.address').detail, /no event streams/);
+  // Since when the address has stayed the same, and that it was kept from before a restart.
+  assert.match(named('connection.address').detail, /Its address has stayed the same since 2026-10-31T00:00:00\.000Z, kept from before the last restart of DevMate\./);
+  assert.equal(named('clients').status, 'warn'); assert.match(named('clients').detail, /DevMate was added to claude-code, but what starts it there is gone/); assert.match(named('clients').fix, /devmate client add claude-code/);
   assert.match(named('security').fix, /devmate connect quick --new-address/);
   assert.match(named('security').detail, /quick tunnel has no sign-in/); assert.doesNotMatch(named('security').fix, /oauth/);
   // What the doctor prints is pasted into bug reports: it names the host and never the key.
@@ -512,6 +521,17 @@ test('through a quick tunnel every answer is one JSON body, also for a call that
     assert.ok(seen.length >= 3 && seen.every(entry => !entry.includes('event-stream')), mode + ': ' + seen.join(', '));
     assert.ok(seen.some(entry => entry === 'POST 200 application/json'), mode + ': ' + seen.join(', '));
   }
+  // A client that calls itself Claude Code is a coding agent on this computer only where it came from this computer: the
+  // same name through the tunnel (Claude Code on another computer) has no files here but DevMate's tools to reach them.
+  // (It names itself with every request, as the current protocol has it: each is known for what it is.)
+  const tools = async transport => { const client = new Client({ name: 'claude-code', version: '1' }, { versionNegotiation: { mode: 'auto' } }); await client.connect(transport, { timeout: 20000 }); try { return (await client.listTools({}, { timeout: 20000 })).tools.map(tool => tool.name); } finally { await client.close(); } };
+  const tunnelled = await tools(new StreamableHTTPClientTransport(new URL(address), { fetch: async (input, init = {}) => {
+    const answer = await request(runtime.ingressPort, new URL(String(input)).pathname, { method: init.method || 'GET', headers: { ...Object.fromEntries(new Headers(init.headers)), host }, body: init.body });
+    return new Response(answer.text || null, { status: answer.status, headers: answer.headers['content-type'] ? { 'content-type': answer.headers['content-type'] } : {} });
+  } }));
+  assert.ok(tunnelled.includes('edit') && !tunnelled.includes('browser_tabs'), 'the tools of Claude: ' + tunnelled.join());
+  const local = await tools(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:' + runtime.port + '/mcp')));
+  assert.ok(local.includes('browser_tabs') && !local.includes('edit'), 'what DevMate adds to a coding agent\'s tools: ' + local.join());
 });
 test('a new address is not asked for before the world knows it, and a stale local answer is not called a broken route', async () => {
   const url = 'https://fresh-fixture.trycloudflare.com/mcp';
