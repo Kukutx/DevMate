@@ -167,3 +167,20 @@ test('a stop with no runtime running ends a quick tunnel a runtime left running;
   let timer;assert.equal(await Promise.race([ended,new Promise(resolve=>{timer=setTimeout(()=>resolve(false),10000);})]).finally(()=>clearTimeout(timer)),true,'the tunnel was ended');
   assert.equal(fs.existsSync(record),false);
 });
+
+test('a start that fails, so that no runtime holds the instance, ends a quick tunnel kept for it',{timeout:60000},async t=>{
+  const { ownedProcess } = await import('../runtime/platform/owned-process.mjs');
+  const base=temp(t),instanceRoot=path.join(base,'failing');fs.mkdirSync(instanceRoot);
+  const tunnel=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true});
+  t.after(()=>{try{tunnel.kill('SIGKILL');}catch{}});
+  await new Promise((resolve,reject)=>{tunnel.once('spawn',resolve);tunnel.once('error',reject);});
+  const record=path.join(instanceRoot,'quick-tunnel.json');
+  assert.equal(await ownedProcess(record).remember(tunnel.pid,{kind:'cloudflare-quick',forwardsTo:8789}),true);
+  // A restart: the stop leaves the tunnel for the start that follows, and that start does not get as far as a runtime.
+  await stopRuntime({instanceRoot,timeoutMs:15000,again:true});
+  const entryPath=path.join(base,'fails.mjs');fs.writeFileSync(entryPath,'process.exit(3);\n');
+  const ended=new Promise(resolve=>tunnel.once('exit',()=>resolve(true)));
+  await assert.rejects(startRuntime({instanceRoot,entryPath,port:await freePort(),timeoutMs:15000}),/exited before readiness/);
+  let timer;assert.equal(await Promise.race([ended,new Promise(resolve=>{timer=setTimeout(()=>resolve(false),10000);})]).finally(()=>clearTimeout(timer)),true,'the tunnel was ended');
+  assert.equal(fs.existsSync(record),false);
+});

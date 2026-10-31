@@ -207,11 +207,11 @@ http://127.0.0.1:8788/mcp
 | Codex CLI | `devmate client add codex`（或手动：`codex mcp add devmate --url http://127.0.0.1:8788/mcp`） |
 | Claude Desktop | `devmate client add claude-desktop`，然后退出 Claude Desktop 再打开 |
 | VS Code 自带的 MCP 支持 | 装了扩展就自动发现 |
-
-`devmate client add` 把 DevMate 写进那个客户端自己的设置文件，作用于你这个用户：`~/.claude.json`（Claude Code）、`CODEX_HOME` 或 `~/.codex` 下的 `config.toml`（Codex，给 DevMate 启动留 60 秒、每次调用留 120 秒）、`claude_desktop_config.json`（Claude Desktop）。客户端启动的是 DevMate 的标准输入输出桥（运行时没在跑时它会先启动运行时），经由实例目录里的一个小程序；运行时每次启动都会让它指向正在运行的这份 DevMate，所以更新后客户端那边什么都不用做，`PATH` 上也不需要有 `devmate`。`devmate client` 显示加到了哪些客户端，`devmate client remove <客户端>` 移除；这两条都要在你自己的终端里执行，连进来的客户端不能执行。加给 Claude Code 的是用户级的服务器，所以在每个项目里都有。
-
-Claude Code 和 Codex 按它们自报的名字认出来，看到的是 DevMate 给它们自己的工具补上的那些：你的浏览器作为四个独立工具（`browser_tabs`、`browser_snapshot`、`browser_screenshot`、`browser_run`；其余方法经 `capability_list`），你共享的其他项目，编辑器报的错误，DevMate 改过的每个文件的历史和撤回，持续运行的命令，以及把任务交给别的 Agent。DevMate 自己读文件、写文件、跑命令的工具不给它们列出（它们自己的工具就做这些；真调用时照样能用），工作台也不列（它们显示不了）。在地址末尾加 `?tools=agent`，别的客户端也会这样。
 | 只会启动程序的客户端 | 命令填 `devmate`，参数填 `mcp`，例如 `{ "command": "devmate", "args": ["mcp"] }` |
+
+`devmate client add` 把 DevMate 写进那个客户端自己的设置文件，作用于你这个用户：`~/.claude.json`（Claude Code）、`CODEX_HOME` 或 `~/.codex` 下的 `config.toml`（Codex，给 DevMate 启动留 60 秒、每次调用留 330 秒）、`claude_desktop_config.json`（Claude Desktop）。客户端启动的是 DevMate 的标准输入输出桥（运行时没在跑时它会先启动运行时），经由实例目录里的一个小程序；运行时每次启动都会让它指向正在运行的这份 DevMate，所以更新后客户端那边什么都不用做，`PATH` 上也不需要有 `devmate`。`devmate client` 显示加到了哪些客户端，`devmate client remove <客户端>` 移除。添加和移除只能在你自己的终端里做，连进来的客户端不能做（它可以用 `devmate client` 查看加在了哪里）。加给 Claude Code 的是用户级的服务器，所以在每个项目里都有。
+
+Claude Code 和 Codex 按它们自报的名字认出来，看到的是 DevMate 给它们自己的工具补上的那些：你的浏览器作为四个独立工具（`browser_tabs`、`browser_snapshot`、`browser_screenshot`、`browser_run`；其余方法经 `capability_list`），你共享的其他项目，编辑器报的错误，DevMate 改过的每个文件的历史和撤回，持续运行的命令，以及把任务交给别的 Agent。DevMate 读单个文件、写、编辑、打补丁、跑命令的工具不给它们列出（它们自己的工具就做这些；真调用时照样能用），工作台也不列（它们显示不了）；找文件、搜索、Git 的只读工具和编辑器报错仍然列出，因为它们能用于任何共享的项目。在地址末尾加 `?tools=agent`，别的客户端也会这样。
 
 其他客户端：添加一个 HTTP（Streamable HTTP）MCP 服务器并填这个地址。来自其他来源的浏览器端客户端会被拒绝，除非你把它的来源加进 DevMate 配置的 `allowedOrigins`；只添加你自己运行的客户端。
 
@@ -258,7 +258,7 @@ devmate restart
 devmate mcp-url
 ```
 
-不需要在任何地方注册：隧道运行期间 Cloudflare 会分配一个随机的 `trycloudflare.com` 主机名，DevMate 会验证它确实能到达本机运行时。这条通路没有登录。地址的末尾是 DevMate 生成一次、之后一直保留的一段密钥（`https://<名字>.trycloudflare.com/mcp/<密钥>`），只有完整地址才打得开：光有主机名（任何能看到 DNS 的人都看得到）得到的是“未找到”。拿到完整地址的人能做你能做的一切，所以只把它给你自己的客户端，不要贴到别处；`devmate doctor` 显示的地址不带密钥。地址跟着 `cloudflared` 走，而 `cloudflared` 比运行时活得久：DevMate 重启、更新、从编辑器重启、运行时出错退出，地址都不变，下一个运行时会把隧道接回来。以下情况地址会变：执行 `devmate stop`（或在编辑器里点停止；运行时没在跑时也一样）、`devmate connection.restart`、电脑重启或注销、和 Cloudflare 长时间断开（比如长时间休眠），或者你自己要一个新地址：`devmate connect quick --new-address`，再 `devmate restart`（地址外泄时就这样做）。之后用 `devmate mcp-url` 取新地址。
+不需要在任何地方注册：隧道运行期间 Cloudflare 会分配一个随机的 `trycloudflare.com` 主机名，DevMate 会验证它确实能到达本机运行时。这条通路没有登录。地址的末尾是 DevMate 生成一次、之后一直保留的一段密钥（`https://<名字>.trycloudflare.com/mcp/<密钥>`），只有完整地址才打得开：光有主机名（任何能看到 DNS 的人都看得到）得到的是“未找到”。拿到完整地址的人能做你能做的一切，所以只把它给你自己的客户端，不要贴到别处；`devmate doctor` 显示的地址不带密钥。地址跟着 `cloudflared` 走，而 `cloudflared` 比运行时活得久：DevMate 重启、更新、从编辑器重启，地址都不变，下一个运行时会把隧道接回来。以下情况地址会变：执行 `devmate stop`（或在编辑器里点停止；运行时没在跑时也一样）、`devmate connection.restart`、运行时因自身错误退出（隧道若留着，会把地址转到一个没人占的端口，本机任何程序都能占）、电脑重启、会结束你程序的注销（Windows 和 macOS 都会）、和 Cloudflare 长时间断开（比如长时间休眠），或者你自己要一个新地址：`devmate connect quick --new-address`，再 `devmate restart`（地址外泄时就这样做）。之后用 `devmate mcp-url` 取新地址。
 
 快速隧道是 Cloudflare [提供给测试和开发用的](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)：不保证可用性，最多同时 200 个请求，不支持事件流。所以 DevMate 经它只回普通 JSON，调用进行中不发进度消息。日常使用请换成地址固定的通路，见下面几种。
 

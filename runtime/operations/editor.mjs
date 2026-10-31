@@ -45,13 +45,13 @@ export function defineEditorOperations(service, add) {
       const state = service.windows.editorState(args.projectId);
       return { attachedWindows: state.attachedWindows, capturedAt: state.capturedAt, active: state.active,
         open: state.open.map(file => file.path + (file.dirty ? ' (unsaved)' : '')), diagnosticCounts: counts(state.diagnostics) };
-    }, { present: result => !result.attachedWindows ? noEditor : [
+    }, { present: (result, own = text => text) => !result.attachedWindows ? own(noEditor) : [
       result.active ? 'Active file: ' + result.active.path + (result.active.languageId ? ' (' + result.active.languageId + ')' : '') + (result.active.dirty ? ', unsaved changes' : '') +
         '\nSelection: ' + result.active.selection.startLine + ':' + result.active.selection.startCharacter + ' to ' + result.active.selection.endLine + ':' + result.active.selection.endCharacter +
         (result.active.selectedText ? '\n--- selected text' + (result.active.selectionTruncated ? ' (truncated)' : '') + ' ---\n' + result.active.selectedText + '\n---' : ' (nothing selected)')
         : 'No file of this project is focused in the editor.',
       'Open files: ' + (result.open.join(', ') || 'none'),
-      'Diagnostics: ' + Object.entries(result.diagnosticCounts).map(([severity, total]) => total + ' ' + severity).join(', ') + '. Use editor_diagnostics for the list.'
+      'Diagnostics: ' + Object.entries(result.diagnosticCounts).map(([severity, total]) => total + ' ' + severity).join(', ') + '. ' + own('Use editor_diagnostics for the list.')
     ].join('\n') });
   add('editor.diagnostics', { ...projectScope, path: projectPath.optional(), severity: z.enum(['error', 'warning', 'info', 'hint']).optional(),
     limit: z.number().int().min(1).max(500).optional() }, true,
@@ -64,7 +64,7 @@ export function defineEditorOperations(service, add) {
       const limit = args.limit || 100;
       return { attachedWindows: state.attachedWindows, capturedAt: state.capturedAt, total: matching.length, counts: counts(matching),
         items: matching.slice(0, limit).map(({ projectId, ...item }) => item), truncated: matching.length > limit || state.diagnosticsTruncated };
-    }, { present: result => !result.attachedWindows ? noEditor : result.items.length
+    }, { present: (result, own = text => text) => !result.attachedWindows ? own(noEditor) : result.items.length
       ? result.items.map(item => item.path + ':' + item.line + ':' + item.character + ' ' + item.severity +
         (item.source ? ' [' + item.source + (item.code ? ' ' + item.code : '') + ']' : '') + ' ' + item.message).join('\n') + (result.truncated ? '\n[more diagnostics exist; narrow by path or severity]' : '')
       : 'The editor reports no diagnostics at this level.' });

@@ -379,8 +379,10 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       clearTimeout(verifyTimer); clearInterval(upkeepTimer);
       streams?.close();
       // A runtime that stops in order to start again (a restart, an update; whoever asks for it says so beside the
-      // instance, see ../launcher.mjs) or because it failed leaves a quick tunnel running for the next one.
-      const again = restarting(), keep = crashed || again;
+      // instance, see ../launcher.mjs) leaves a quick tunnel running for the next one. One that failed does not: until
+      // another runtime is started, which may be much later, the tunnel would forward the public address, key and all,
+      // to a port nobody holds, and any program of this computer could take that port and be handed the owner's calls.
+      const again = restarting(), keep = again;
       if (again) process.stderr.write(new Date().toISOString() + ' stopping to be started again: what lives on between two runtimes stays\n');
       const results = await Promise.allSettled([service?.close(), connection?.stop({ keep }), tunnelBeside?.stop(), mcpHandler?.close(), plainHandler?.close()]);
       const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);

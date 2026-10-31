@@ -147,6 +147,8 @@ test('the instructions of every surface stay within 2000 characters, with full a
         // The projects are fitted as they are written, what follows them counted ahead: the plain count, the last
         // resort where the words would not fit after all, is not what is said.
         assert.doesNotMatch(words, /projects are shared \(project_list\)/, what + ', ' + shell.label + ', ' + surface);
+        // With no project, how one is shared is said on every surface: the client's way where the owner gave it one.
+        if (/no project/.test(what)) assert.match(words, service.fullAccess() ? /project\.create/ : /devmate project add <folder>/, what + ', ' + shell.label + ', ' + surface);
       }
     }
     service.processes.shell = shells[0];
@@ -156,6 +158,11 @@ test('the instructions of every surface stay within 2000 characters, with full a
   for (const profile of ['guarded', 'full']) { await service.call('access.update', { profile }, owner); look(profile + ', forty projects'); }
   // Where there is room, projects are named before the rest is counted.
   assert.match(serverInstructions(service, 'agent'), /Projects: \S+ = project-with-a-name-of-some-length-0 .* and \d+ more \(project_list\)\./);
+  // A project's name and folder are the owner's, given as they are, whatever tool names they hold.
+  for (const project of service.store.list('project', { limit: 50 })) await service.call('project.remove', { id: project.id }, owner);
+  await service.call('access.update', { profile: 'guarded' }, owner);
+  const named = path.join(temp, 'shell_run'); fs.mkdirSync(named); await service.call('project.create', { root: named }, owner);
+  for (const surface of ['gpt', 'claude']) assert.ok(serverInstructions(service, surface).includes('= shell_run (' + named + ', '), surface);
 });
 
 test('a request that calls finds every tool, whatever list its caller was shown', async t => {
@@ -167,6 +174,20 @@ test('a request that calls finds every tool, whatever list its caller was shown'
   assert.match(f.text(await client.callTool({ name: 'workspace_read', arguments: { path: 'a.txt' } })), /1\talpha/);
   assert.match(f.text(await client.callTool({ name: 'edit', arguments: { path: 'a.txt', edits: [{ old_text: 'alpha', new_text: 'beta' }] } })), /"replacements":1/);
   assert.equal((await client.callTool({ name: 'project_list', arguments: {} })).structuredContent.items.length, 1);
+});
+
+test('only what DevMate says is put into the names of a surface: a file, command output and instructions read are given as they are', { timeout: 60000 }, async t => {
+  const f = await fixture(t), client = await f.open({ surface: 'gpt' });
+  const call = async (name, args) => f.text(await client.callTool({ name, arguments: args }));
+  const words = 'Call workspace_read first, then shell_run; process_read follows it.';
+  fs.writeFileSync(path.join(f.root, 'AGENTS.md'), words + '\n');
+  assert.match(await call('workspace_read', { path: 'AGENTS.md' }), new RegExp('1\\t' + words.replace(/[.;,]/g, '\\$&')));
+  assert.ok((await call('project_overview', {})).includes(words), 'the project\'s instructions');
+  fs.writeFileSync(path.join(f.root, 'says.js'), "console.log(" + JSON.stringify(words) + ");setTimeout(()=>{},3000)");
+  const running = await call('shell_run', { command: run('says.js'), waitMs: 1500 });
+  assert.ok(running.includes(words), running);
+  // The hint after the output is DevMate's, and names the tool of this surface.
+  assert.match(running, /\[still running; write_stdin \{id:"/);
 });
 
 test('the tools a GPT model knows work as it expects: read, apply_patch, exec_command, write_stdin', { timeout: 60000 }, async t => {

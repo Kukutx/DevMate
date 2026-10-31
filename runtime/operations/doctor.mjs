@@ -190,7 +190,7 @@ export async function doctor(service) {
   try {
     const { clients } = createClientRegistration({ instanceRoot: service.instanceRoot, cli: fileURLToPath(new URL('../cli.mjs', import.meta.url)) }).status();
     const added = clients.filter(item => item.registered), stale = added.filter(item => item.stale), list = items => items.map(item => item.client).join(', ');
-    if (stale.length) check('clients', 'warn', 'DevMate was added to ' + list(stale) + ' with a Node that is not there any more: it cannot start DevMate.', 'Add it again: ' + stale.map(item => 'devmate client add ' + item.client).join('; '));
+    if (stale.length) check('clients', 'warn', 'DevMate was added to ' + list(stale) + ', but what starts it there is gone (the Node it was added with, or DevMate\'s bridge in the instance directory): it cannot start DevMate.','Add it again: ' + stale.map(item => 'devmate client add ' + item.client).join('; '));
     else if (added.length) check('clients', 'ok', 'DevMate is one of the MCP servers of ' + list(added) + ' on this computer.');
   } catch { /* a settings file that cannot be read is said by devmate client */ }
   // Full access is a choice, not a fault. Without sign-in on a public route it is everyone's who learns the address.

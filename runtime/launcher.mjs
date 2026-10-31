@@ -172,6 +172,9 @@ export async function startRuntime({
     throw new Error(`DevMate runtime startup timed out. See ${files.log}`);
   } catch (error) {
     if (child && !childExited(child)) await terminateProcessTree(child);
+    // No runtime holds this instance now: a quick tunnel kept for the one that should have started (a restart that
+    // did not get this far) would forward the public address to a port nobody holds, which any program could take.
+    if (!(await status().catch(() => ({}))).processAlive) await ownedProcess(path.join(files.directory, 'quick-tunnel.json')).reap().catch(() => {});
     throw error;
   }
 }

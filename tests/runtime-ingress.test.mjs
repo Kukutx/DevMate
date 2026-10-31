@@ -385,10 +385,11 @@ test('the key in a quick tunnel\'s address is made once and kept by the instance
   assert.deepEqual(stops.at(-1), { keep: true });
   assert.equal(fs.existsSync(path.join(instanceRoot, 'restarting')), false);
   const fake = () => ({ async start() {}, async stop(options) { stops.push(options); }, publicUrl: () => null, status() { return { kind: 'cloudflare-quick', phase: 'connecting', remoteMcpVerified: false }; } });
-  // A runtime that fails keeps it too: the next one takes the tunnel back.
+  // A runtime that fails ends it: until another runtime is started, which may be much later, a tunnel kept then would
+  // forward the public address, key and all, to a port nobody holds.
   const failing = await startRuntime({ instanceRoot, port: 0, connectionFactory: fake });
   await failing.stop({}, { crashed: true });
-  assert.deepEqual(stops.at(-1), { keep: true });
+  assert.deepEqual(stops.at(-1), { keep: false });
   // A word left from before this runtime started is no word for its stop, nor is one too old to be this stop's.
   fs.writeFileSync(path.join(instanceRoot, 'restarting'), '');
   const later = await startRuntime({ instanceRoot, port: 0, connectionFactory: fake });
