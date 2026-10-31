@@ -12,11 +12,14 @@ import { BROWSER_CAPABILITIES, BROWSER_TEXT } from './chrome.mjs';
  * Which surface a client gets, and what decided it: the owner's word in the address, what the client says it is, how
  * it reached the runtime, or nothing of these.
  */
-export function clientSurfaceBy({ chosen, name, userAgent, tunnel } = {}) {
+export function clientSurfaceBy({ chosen, name, userAgent, tunnel, local = false } = {}) {
   if (['gpt', 'claude', 'generic', 'agent'].includes(chosen)) return { surface: chosen, by: 'address' };
   // A coding agent on this computer (Claude Code, Codex) reads, writes and runs commands with tools of its own: it is
-  // shown what it does not have (see SURFACES.agent). Known by the name it gives itself.
-  if (/^(claude-code|codex-mcp-client)$/i.test(String(name || '').trim())) return { surface: 'agent', by: 'name' };
+  // shown what it does not have (see SURFACES.agent). Known by the name it gives itself, or by the name DevMate's own
+  // stdio bridge carries for it in its sender line ("devmate-mcp (claude-code)"), and only where it came the local way:
+  // the same agent on another computer reaches this one's projects through DevMate's tools alone.
+  const agentName = /^(claude-code|codex-mcp-client)$/i, carried = String(userAgent || '').match(/\((claude-code|codex-mcp-client)\)/i)?.[1];
+  if (local && (agentName.test(String(name || '').trim()) || (!name && carried))) return { surface: 'agent', by: 'name' };
   const said = String(name || '') + ' ' + String(userAgent || '');
   if (/openai|chatgpt|codex|\bgpt\b/i.test(said)) return { surface: 'gpt', by: 'name' };
   if (/claude|anthropic/i.test(said)) return { surface: 'claude', by: 'name' };

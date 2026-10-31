@@ -39,9 +39,13 @@ const SHELL_TOOL = process.platform === 'win32' ? 'powershell' : 'bash', OTHER_S
 test('a client gets the tools of the model it is: by its name, by how it reached the runtime, or as the owner chose', () => {
   for (const [said, surface] of [[{ name: 'openai-mcp' }, 'gpt'], [{ name: 'ChatGPT' }, 'gpt'], [{ userAgent: 'openai-mcp/1.0.0' }, 'gpt'],
     [{ name: 'claude-ai' }, 'claude'], [{ userAgent: 'Claude-User' }, 'claude'], [{ name: 'Anthropic/Toolbox' }, 'claude'],
-    // A coding agent on this computer, by the name it gives itself: it reads, writes and runs with tools of its own.
-    [{ name: 'claude-code', userAgent: 'claude-code/2.1.0' }, 'agent'], [{ name: 'codex-mcp-client' }, 'agent'], [{ name: ' Claude-Code ' }, 'agent'], [{ chosen: 'agent', name: 'my-script' }, 'agent'],
-    [{ userAgent: 'claude-code/2.1.0' }, 'claude'], [{ name: 'codex-mcp-client-fork' }, 'gpt'],
+    // A coding agent on this computer, by the name it gives itself (or the one DevMate's bridge carries for it in its
+    // sender line), where it came the local way: it reads, writes and runs with tools of its own.
+    [{ name: 'claude-code', userAgent: 'claude-code/2.1.0', local: true }, 'agent'], [{ name: 'codex-mcp-client', local: true }, 'agent'], [{ name: ' Claude-Code ', local: true }, 'agent'],
+    [{ userAgent: 'devmate-mcp (claude-code)', local: true }, 'agent'], [{ userAgent: 'devmate-mcp (codex-mcp-client)', local: true }, 'agent'], [{ chosen: 'agent', name: 'my-script' }, 'agent'],
+    [{ userAgent: 'claude-code/2.1.0', local: true }, 'claude'], [{ name: 'codex-mcp-client-fork', local: true }, 'gpt'],
+    // The same agent on another computer, through the public address or a tunnel: DevMate's own tools are its way in.
+    [{ name: 'claude-code' }, 'claude'], [{ name: 'codex-mcp-client', tunnel: true }, 'gpt'], [{ userAgent: 'devmate-mcp (claude-code)' }, 'claude'],
     [{ name: 'Visual Studio Code' }, 'generic'], [{ name: 'cursor-vscode' }, 'generic'], [{}, 'generic'], [undefined, 'generic'], [{ name: 'my-script', userAgent: 'node' }, 'generic'],
     // OpenAI's tunnel carries ChatGPT whatever it calls itself; what the client says still comes first.
     [{ tunnel: true }, 'gpt'], [{ tunnel: true, name: 'claude-ai' }, 'claude'],
@@ -110,19 +114,48 @@ test('a coding agent on this computer is shown what DevMate adds to its own tool
   assert.ok(listed.tools.find(tool => tool.name === 'browser_run').inputSchema.properties.steps, 'browser_run takes the steps of chrome.page.run');
   // Claude Code is told how large a result may be.
   for (const tool of listed.tools) assert.equal(tool._meta?.['anthropic/maxResultSizeChars'], 140000, tool.name);
-  // The instructions say what is DevMate's own, and how much: within 2000 characters with full access too.
-  const words = serverInstructions(f.service, 'agent');
-  assert.match(words.slice(0, 512), /with your own tools/); assert.match(words, /browser_snapshot/); assert.doesNotMatch(words, /workspace_read|shell_run|apply_patch/);
-  await f.service.call('access.update', { profile: 'full' }, owner);
-  for (let index = 0; index < 30; index++) { const root = path.join(f.temp, 'more-' + index); fs.mkdirSync(root); await f.service.call('project.create', { root }, owner); }
-  assert.ok(serverInstructions(f.service, 'agent').length <= 2000, serverInstructions(f.service, 'agent').length + ' characters');
-  // What it is not shown it can still call, and the browser tools are the capability calls underneath: with no browser
-  // connected they say so, as capability_query would.
-  const client = await f.open({ surface: 'agent' });
-  fs.writeFileSync(path.join(f.root, 'a.txt'), 'alpha\n');
-  assert.match(f.text(await client.callTool({ name: 'workspace_read', arguments: { projectId: f.project.id, path: 'a.txt' } })), /1\talpha/);
-  const tabs = await client.callTool({ name: 'browser_tabs', arguments: {} });
-  assert.equal(tabs.isError, true); assert.match(tabs.content[0].text, /browser_unavailable/);
+  // The instructions say what is DevMate's own, all of it within the first 512 characters (some clients read no more),
+  // and name none of DevMate's tools to read, write or run, in either spelling.
+  const words = serverInstructions(f.service, 'agent'), first = words.slice(0, 512);
+  for (const name of ['with your own tools', 'browser_snapshot', 'project_list', 'editor_diagnostics', 'workspace_restore', 'process_stop', 'agents_delegate', 'projectId']) assert.ok(first.includes(name), name + ' is not within 512 characters');
+  assert.doesNotMatch(words, /workspace[._]read|shell[._]run|apply[._]patch/);
+  // The browser tools are the capability calls underneath, answered by the browser that is connected.
+  const client = await f.open({ surface: 'agent' }), linkId = f.service.browser.attach({ browser: 'Test browser', extension: '4.0.6', methods: ['tabs.list'] }).linkId;
+  await f.service.browser.next({ linkId, waitMs: 1000 });
+  const asked = client.callTool({ name: 'browser_tabs', arguments: {} }), handed = await f.service.browser.next({ linkId, waitMs: 5000 });
+  assert.deepEqual(handed.calls.map(call => call.method), ['tabs.list']);
+  f.service.browser.result({ linkId, id: handed.calls[0].id, ok: true, result: { items: [{ id: 7, windowId: 1, title: 'A tab of the test', url: 'https://example.com/' }] } });
+  const tabs = await asked;
+  assert.equal(tabs.isError, undefined, JSON.stringify(tabs.content)); assert.match(tabs.content[0].text, /A tab of the test/);
+  f.service.browser.detach({ linkId });
+});
+
+test('the instructions of every surface stay within 2000 characters, with full access and with no project, one, or many', async t => {
+  // With full access and no project the instructions were 2098 characters (2108 with Windows PowerShell 5.1), and with
+  // forty projects they were too long while naming none of them.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-instructions-'));
+  const service = new DevMateService({ instanceRoot: path.join(temp, 'instance'), endpoint: '' });
+  await service.ready;
+  t.after(async () => { await service.close(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const shells = [service.processes.shell, { kind: 'powershell', label: 'Windows PowerShell 5.1', noChaining: true }];
+  const look = what => {
+    for (const shell of shells) {
+      service.processes.shell = shell;
+      for (const surface of ['generic', 'gpt', 'claude', 'agent']) {
+        const words = serverInstructions(service, surface);
+        assert.ok(words.length <= 2000, what + ', ' + shell.label + ', ' + surface + ': ' + words.length + ' characters');
+        // The projects are fitted as they are written, what follows them counted ahead: the plain count, the last
+        // resort where the words would not fit after all, is not what is said.
+        assert.doesNotMatch(words, /projects are shared \(project_list\)/, what + ', ' + shell.label + ', ' + surface);
+      }
+    }
+    service.processes.shell = shells[0];
+  };
+  for (const profile of ['guarded', 'full']) { await service.call('access.update', { profile }, owner); look(profile + ', no project'); }
+  for (let index = 0; index < 40; index++) { const root = path.join(temp, 'project-with-a-name-of-some-length-' + index); fs.mkdirSync(root); await service.call('project.create', { root }, owner); }
+  for (const profile of ['guarded', 'full']) { await service.call('access.update', { profile }, owner); look(profile + ', forty projects'); }
+  // Where there is room, projects are named before the rest is counted.
+  assert.match(serverInstructions(service, 'agent'), /Projects: \S+ = project-with-a-name-of-some-length-0 .* and \d+ more \(project_list\)\./);
 });
 
 test('a request that calls finds every tool, whatever list its caller was shown', async t => {

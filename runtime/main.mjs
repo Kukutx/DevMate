@@ -455,7 +455,8 @@ export async function startRuntime({ instanceRoot = path.join(os.homedir(), '.de
       // (The runtime's own check of its route names itself and is no client: its name is not given to whoever else
       // sends the same line, such as a script on the plain Node user agent.)
       if (said && sender && said !== VERIFY_CLIENT) { named.delete(sender); named.set(sender, String(said).slice(0, 200)); if (named.size > 64) named.delete(named.keys().next().value); }
-      const decided = clientSurfaceBy({ chosen: new URL(request.url).searchParams.get('tools'), name: said || (sender ? named.get(sender) : undefined), userAgent: sender, tunnel });
+      const decided = clientSurfaceBy({ chosen: new URL(request.url).searchParams.get('tools'), name: said || (sender ? named.get(sender) : undefined), userAgent: sender, tunnel,
+        local: extra.authInfo?.extra?.via === 'local' });
       // Who asked last and which tool names they were given, for the doctor. What a client says of itself is its own
       // text: kept short and printable. A client of the 2025 protocol names itself once; its later requests keep that
       // name while the sender line stays the same. The check of the public route asks as itself and is not a client.
