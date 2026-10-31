@@ -216,13 +216,21 @@ export function createCapabilities(chrome, { version = '', ownPort = () => undef
       };
       const seen = fullPage !== true && page.active && await shown();
       if (!seen) return debug.capture(page.id, { fullPage: fullPage === true });
-      // Under a dialog the browser was seen to give the picture at once, and also not at all: it is not waited for to the end.
-      const image = await Promise.race([chrome.tabs.captureVisibleTab(page.windowId, { format: 'png' }).catch(error => { throw fail('browser_error', 'The browser did not capture this tab (' + String(error?.message || error).slice(0, 200) + ').'); }),
-        later(8000).then(() => { throw fail('browser_error', 'The browser gave no picture of this tab in eight seconds. A page that is showing a dialog may be why: answer it with page.dialog, or, where the tab does not answer that either, close the dialog in the browser or load the page again (tabs.reload).'); })]);
-      // The window is pictured, not the tab: one that came to the front meanwhile (another call brought it there) is
-      // not handed over under this tab's name, nor at all where it is one that is not read through the browser.
-      const front = (await chrome.tabs.query({ active: true, windowId: page.windowId }))[0];
-      if (front?.id !== page.id || own(front)) throw fail('browser_error', 'Another tab came to the front of this window while it was pictured, so the picture was not handed over. Ask again.');
+      // The window is pictured, not the tab: one that came to the front meanwhile (another call brought it there, and
+      // perhaps this one back again) is not handed over under this tab's name, nor at all where it is one that is not
+      // read through the browser. Every tab brought to the front of the window while the picture is taken is heard.
+      let moved = false;
+      const turned = change => { if (change?.windowId === page.windowId && change.tabId !== page.id) moved = true; };
+      chrome.tabs.onActivated?.addListener?.(turned);
+      let image, front;
+      try {
+        // Under a dialog the browser was seen to give the picture at once, and also not at all: it is not waited for to the end.
+        image = await Promise.race([chrome.tabs.captureVisibleTab(page.windowId, { format: 'png' }).catch(error => { throw fail('browser_error', 'The browser did not capture this tab (' + String(error?.message || error).slice(0, 200) + ').'); }),
+          later(8000).then(() => { throw fail('browser_error', 'The browser gave no picture of this tab in eight seconds. A page that is showing a dialog may be why: answer it with page.dialog, or, where the tab does not answer that either, close the dialog in the browser or load the page again (tabs.reload).'); })]);
+        // Asked while still listening, so that a change the browser tells only after the picture is heard as well.
+        front = (await chrome.tabs.query({ active: true, windowId: page.windowId }))[0];
+      } finally { chrome.tabs.onActivated?.removeListener?.(turned); }
+      if (moved || front?.id !== page.id || own(front)) throw fail('browser_error', 'Another tab came to the front of this window while it was pictured, so the picture was not handed over. Ask again.');
       return { tabId: page.id, mimeType: 'image/png', base64: image.slice(image.indexOf(',') + 1) };
     },
     ...debug.methods

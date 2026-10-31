@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomInt } from 'node:crypto';
 import { z } from 'zod';
 import { DomainError } from './store.mjs';
 import { ownerCommand } from './operations/shared.mjs';
@@ -129,6 +130,8 @@ public static class DevMateDesktop {
     EnumChildWindows(root, (hwnd, data) => { var kind = new StringBuilder(64); GetClassName(hwnd, kind, 64); string name = kind.ToString(); if (name == "SHELLDLL_DefView" || name == "DUIViewWndClassName") { found = true; return false; } return true; }, IntPtr.Zero);
     return found;
   }
+  // The top-level window a window is in.
+  public static long Root(long handle) { IntPtr root = GetAncestor(new IntPtr(handle), 2); return root == IntPtr.Zero ? handle : root.ToInt64(); }
   // Whether the last window drawn did not draw itself, and was copied from the screen instead (see Draw).
   public static bool FromScreen;
   [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr hwnd, uint id, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out object found);
@@ -158,7 +161,7 @@ public static class DevMateDesktop {
     if (kind == "edit" && action == "setValue") {
       // A rich text field takes a text that begins as RTF does for formatting, not for the text.
       var named = new StringBuilder(64); GetClassName(hwnd, named, 64);
-      if (named.ToString().IndexOf("RichEdit", StringComparison.OrdinalIgnoreCase) >= 0 && value != null && (value.StartsWith("{\\rtf") || value.StartsWith("{urtf"))) return "rtf";
+      if (named.ToString().IndexOf("RichEdit", StringComparison.OrdinalIgnoreCase) >= 0 && value != null && (value.StartsWith("{\\rtf") || value.StartsWith("{\\urtf"))) return "rtf";
       if (SendMessageTimeout(hwnd, 0x0C, IntPtr.Zero, value ?? "", 2, (uint)ms, out result) == IntPtr.Zero) return Marshal.GetLastWin32Error() == 1460 ? "waiting" : "failed";
       if (result == IntPtr.Zero) return "refused";
       // A field of one line tells its program that its text changed; one of several lines set this way does not, and it
@@ -281,7 +284,7 @@ function Windows() {
   }
   return ,$list
 }
-function Snapshot($handle, $most, $budget, $who) {
+function Snapshot($handle, $most, $budget, $who, $base) {
   if (-not [DevMateDesktop]::Exists($handle)) { throw 'not_found|No window has the handle ' + $handle + ' any more. desktop.windows lists those that are open.' }
   $request = New-Object System.Windows.Automation.CacheRequest
   $request.TreeScope = [System.Windows.Automation.TreeScope]::Element
@@ -327,9 +330,8 @@ function Snapshot($handle, $most, $budget, $who) {
     if ($null -ne $child) { $more = $true }
     for ($i = $children.Count - 1; $i -ge 0; $i--) { $stack.Push(@($children[$i], ($depth + 1))) }
   }
-  # Each snapshot numbers its lines from a base of its own, so that a ref of an earlier one (of this caller's, or of
-  # another conversation that goes by the same name) is refused instead of naming another control.
-  $script:shots += 1; $base = $script:shots * 10000
+  # Each snapshot numbers its lines from a base of its own, given by the runtime (see call), so that a ref of an earlier
+  # one (of this caller's, or of another conversation that goes by the same name) is refused instead of naming another control.
   $key = [string]$who + '|' + [string]$handle
   $held[$key] = @{ base = $base; elements = $elements }; [void]$heldOrder.Remove($key); [void]$heldOrder.Add($key)
   while ($heldOrder.Count -gt 16) { $held.Remove($heldOrder[0]); $heldOrder.RemoveAt(0) }
@@ -349,8 +351,8 @@ function Allowed($program, $apps, $never) {
 }
 function Act($handle, $ref, $action, $value, $never, $apps, $who) {
   if (-not [DevMateDesktop]::Exists($handle)) { throw 'not_found|No window has the handle ' + $handle + ' any more. desktop.windows lists those that are open.' }
-  $program = Program ([DevMateDesktop]::ProcessOf($handle))
-  if ($program -eq 'ApplicationFrameHost') { throw 'not_supported|This is the frame Windows draws around an app from the Microsoft Store (ApplicationFrameHost). DevMate does not act in those apps yet.' }
+  $program = Program ([DevMateDesktop]::ProcessOf($handle)); $framed = 'not_supported|This is the frame Windows draws around an app from the Microsoft Store (ApplicationFrameHost). DevMate does not act in those apps yet.'
+  if ($program -eq 'ApplicationFrameHost') { throw $framed }
   $refused = Allowed $program $apps $never
   if ($refused) { throw $refused }
   $taken = $held[[string]$who + '|' + [string]$handle]; $at = if ($null -ne $taken) { $ref - $taken.base } else { 0 }
@@ -359,8 +361,11 @@ function Act($handle, $ref, $action, $value, $never, $apps, $who) {
   try { $c = $el.Current; $inside = Program $c.ProcessId } catch { throw ('not_found|The control of ref ' + $ref + ' is no longer in the window. Take a new desktop.snapshot.') }
   $refused = Allowed $inside $apps $never
   if ($refused) { throw $refused }
+  # Where the window around the control cannot be told, it is not known not to be such a dialog either.
   $native = Native $el
-  if ($native -and [DevMateDesktop]::FileDialog($native)) { throw 'forbidden|This is the window where a program asks where to save a file or which one to open. What is chosen there reaches every folder of this computer, past what the owner shares and DevMate''s own settings among them, so DevMate does not act in it: the owner chooses the file themselves.' }
+  if (-not $native) { throw 'not_found|The window this control is in could not be told, so it is not acted on. Take a new desktop.snapshot.' }
+  if ((Program ([DevMateDesktop]::ProcessOf([DevMateDesktop]::Root($native)))) -eq 'ApplicationFrameHost') { throw $framed }
+  if ([DevMateDesktop]::FileDialog($native)) { throw 'forbidden|This is the window where a program asks where to save a file or which one to open. What is chosen there reaches every folder of this computer, past what the owner shares and DevMate''s own settings among them, so DevMate does not act in it: the owner chooses the file themselves.' }
   $told = if ($c.NativeWindowHandle) { [DevMateDesktop]::Describe($c.NativeWindowHandle) } else { $null }
   $plain = if ($told) { $told[0] } else { $null }
   if ($c.IsPassword -or $plain -eq 'password') { throw 'forbidden|This is a password field: DevMate neither types into it nor reads it. The owner fills it in.' }
@@ -375,7 +380,7 @@ function Act($handle, $ref, $action, $value, $never, $apps, $who) {
     if ($done -eq 'unsupported') { throw ('invalid_input|This control does not take ' + $action + '. It takes: ' + $(if (@([DevMateDesktop]::Offers($el)).Count) { ([DevMateDesktop]::Offers($el) -join ', ') } else { 'none of the actions' }) + '.') }
   }
   if ($done -eq 'refused') { throw ('invalid_input|The program refused ' + $action + ' for this control (it may be busy, or not take it now).') }
-  if ($done -eq 'rtf') { throw 'invalid_input|This field reads a text that begins with {\rtf as formatting, not as the text. Begin it otherwise.' }
+  if ($done -eq 'rtf') { throw 'invalid_input|A rich text field may read a text that begins with {\rtf or {\urtf as formatting, not as the text (older ones do), so DevMate does not hand it such a text. Begin it otherwise.' }
   if ($done -eq 'failed') { throw ('invalid_input|' + $(if ($action -eq 'setValue') { 'The text could not be handed to this field' } else { 'The ' + $action + ' could not be handed to this control' }) + ': its program does not take it (it may run with more rights than DevMate, or not answer).') }
   if ($done -eq 'gone') { throw ('not_found|The control of ref ' + $ref + ' is no longer in the window. Take a new desktop.snapshot.') }
   if ($done -eq 'disabled') { throw 'invalid_input|This control is switched off (disabled or read only) for now.' }
@@ -406,7 +411,7 @@ while ($true) {
   try {
     switch ($request.method) {
       'windows' { $result = @{ items = (Windows) } }
-      'snapshot' { $result = Snapshot ([long]$request.params.handle) ([int]$request.params.most) ([int]$request.params.budget) ([string]$request.params.who) }
+      'snapshot' { $result = Snapshot ([long]$request.params.handle) ([int]$request.params.most) ([int]$request.params.budget) ([string]$request.params.who) ([long]$request.params.base) }
       'screenshot' { $result = Screenshot $(if ($null -ne $request.params.handle) { [long]$request.params.handle } else { $null }) }
       'act' { $result = Act ([long]$request.params.handle) ([int]$request.params.ref) ([string]$request.params.action) $request.params.value @($request.params.never) @($request.params.apps) ([string]$request.params.who) }
       default { throw 'not_supported|No such method: ' + $request.method }
@@ -457,7 +462,9 @@ export function createDesktop({ platform = process.platform, spawnHost = spawnPo
   // full access only); apps: the programs acted in.
   const switched = () => ({ enabled: typeof stored()?.enabled === 'boolean' ? stored().enabled : null, apps: Array.isArray(stored()?.apps) ? stored().apps : [] });
   const reads = () => switched().enabled ?? fullAccess();
-  let host = null, sequence = 0;
+  // shots: where each snapshot's numbers begin, counted on from a start of chance, so that the numbers of no two
+  // snapshots meet, also across the program that reads the windows starting anew and the runtime itself.
+  let host = null, sequence = 0, shots = randomInt(1, 100000);
   const end = (running, why) => {
     if (host !== running) return;
     host = null;
@@ -512,7 +519,8 @@ export function createDesktop({ platform = process.platform, spawnHost = spawnPo
         const cancelled = () => { running.pending.delete(id); clearTimeout(timer); reject(fault('cancelled', DESKTOP_ENGINE + '.' + method + ' was cancelled.' + unsure)); };
         signal?.addEventListener('abort', cancelled, { once: true });
         running.pending.set(id, { method, resolve: value => { clearTimeout(timer); signal?.removeEventListener('abort', cancelled); resolve(value); }, reject: error => { clearTimeout(timer); signal?.removeEventListener('abort', cancelled); reject(error); } });
-        running.child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
+        // What is sent is made as it is sent (params may be a function): after a start, the owner's list as it is then.
+        running.child.stdin.write(JSON.stringify({ id, method, params: typeof params === 'function' ? params() : params }) + '\n');
       });
     } finally {
       if (host === running && !running.pending.size) { running.idle = setTimeout(() => end(running, 'it was not used for a while'), idleMs); running.idle.unref?.(); }
@@ -535,7 +543,7 @@ export function createDesktop({ platform = process.platform, spawnHost = spawnPo
     if (definition.method === 'act') {
       if ((params.action === 'setValue') !== (params.value !== undefined)) throw fault('invalid_input', 'value goes with setValue, and only with it.', { notStarted: true });
       if (!switched().apps.length) throw fault('forbidden', 'The owner has not named any program DevMate may act in: a control acted on acts as them. They name the programs at their computer, for example: ' + SWITCH_INPUT_ON + '. Full access does not do it for them. Do not try to work around it.', { notStarted: true });
-      const done = await ask('act', { handle: params.handle, ref: params.ref, action: params.action, ...(params.value !== undefined ? { value: params.value } : {}), never, apps: switched().apps, who }, signal);
+      const done = await ask('act', () => ({ handle: params.handle, ref: params.ref, action: params.action, ...(params.value !== undefined ? { value: params.value } : {}), never, apps: switched().apps, who }), signal);
       return { handle: params.handle, ref: params.ref, action: params.action, control: done.control, name: done.name,
         ...(done.waiting ? { waiting: true, note: 'The program has not finished it after three seconds: it may have opened a dialog of its own. desktop.windows and desktop.snapshot show what is there now.' } : {}), untrusted: true };
     }
@@ -546,7 +554,7 @@ export function createDesktop({ platform = process.platform, spawnHost = spawnPo
     if (definition.method === 'snapshot') {
       const most = params.maxNodes ?? 300, wanted = params.query?.toLowerCase();
       // With words to look for, the whole window is read and the lines that have them kept.
-      const { nodes = [], more = false, base = 0 } = await ask('snapshot', { handle: params.handle, most: wanted ? 1500 : most, budget: walkMs, who }, signal);
+      const { nodes = [], more = false, base = 0 } = await ask('snapshot', { handle: params.handle, most: wanted ? 1500 : most, budget: walkMs, who, base: ++shots * 10000 }, signal);
       const all = desktopLines(nodes, base), kept = wanted ? all.filter(line => line.toLowerCase().includes(wanted)) : all, given = kept.slice(0, most);
       return { handle: params.handle, text: given.join('\n'), nodes: given.length, ...(wanted ? { query: params.query, matched: kept.length } : {}),
         ...(kept.length > most || more ? { truncated: true } : {}), untrusted: true };

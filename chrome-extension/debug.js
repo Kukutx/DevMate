@@ -295,10 +295,13 @@ const inPage = (work, ...given) => '(' + work + ')(' + given.map(value => JSON.s
  */
 export function createDebugger(chrome, { target, clock = () => Date.now(), schedule = (run, ms) => setTimeout(run, ms), cancel = clearTimeout, pause = ms => new Promise(resolve => setTimeout(resolve, ms)), onChange = () => {} } = {}) {
   const sessions = new Map(), opening = new Map(), opened = new Map();
-  // issued: the tab each ref was given on. A number given on one tab is not given on another, so a ref taken from the
-  // snapshot of one tab cannot name an element of another (the tab in front, which may have changed meanwhile).
+  // issued: the tab and the page each ref was given for. A number given for one page is not given for another, of
+  // this tab or of another (a page of another site, drawn by another process, numbers its elements from 1 again), so
+  // a ref taken from one snapshot cannot name an element of another page: the tab in front, which may have changed
+  // meanwhile, or the next page of its own tab. pages: the pages of every tab are counted together, while the
+  // extension runs, so that no two have the same number (session.page).
   const issued = new Map();
-  let listening = false, unused = FRESH_FROM;
+  let listening = false, unused = FRESH_FROM, pages = 0;
   const raw = (tabId, method, params = {}) => chrome.debugger.sendCommand({ tabId }, method, params);
   const command = (tabId, method, params) => raw(tabId, method, params).catch(error => { throw fail('browser_error', method + ' failed: ' + said(error)); });
   const dialogOf = session => session.dialog.type + ': ' + JSON.stringify(cut(session.dialog.message, 300));
@@ -328,7 +331,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     } else if (method === 'Page.javascriptDialogClosed') session.dialog = null;
     // Where one page ends and the next begins, in the list of what was printed. The elements of the page that ends go
     // with it: the refs a snapshot gave for it are not taken for the next one (see element).
-    else if (method === 'Page.frameNavigated') { if (!params.frame?.parentId) { session.page++; note(session, session.console, { level: 'navigation', text: 'Went to ' + cut(params.frame?.url, 500) }); } }
+    else if (method === 'Page.frameNavigated') { if (!params.frame?.parentId) { session.page = ++pages; note(session, session.console, { level: 'navigation', text: 'Went to ' + cut(params.frame?.url, 500) }); } }
     else if (method === 'Network.requestWillBeSent') {
       note(session, session.requests, { requestId: params.requestId, method: params.request?.method, url: cut(params.request?.url, 500), type: params.type, started: params.timestamp,
         requestHeaders: headers(params.request?.headers), hasBody: params.request?.hasPostData === true });
@@ -371,7 +374,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     // page counts the pages the tab has gone to while it is debugged; refs are those the snapshots of one of them gave,
     // each with the element it names (ids), and those of the page before.
     const session = { tabId, seq: 0, since: clock(), console: Object.assign([], { dropped: 0 }), requests: Object.assign([], { dropped: 0 }), byId: new Map(), waiters: new Set(), dialog: null, timer: null, awake: false, waking: null, put: false, undrawn: false, lent: 0,
-      page: 0, refs: { page: 0, ids: new Map(), before: new Map() } };
+      page: ++pages, refs: { page: 0, ids: new Map(), before: new Map() } };
     sessions.set(tabId, session);
     opened.set(tabId, (opened.get(tabId) || 0) + 1);
     try {
@@ -504,11 +507,12 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   // else: such a ref would reach another element than the one that was listed.
   async function element(id, { ref, selector, text: shown }) {
     if (ref !== undefined) {
-      const wanted = whole(ref, 'ref', { min: 1 }), session = sessions.get(id), node = session?.refs.ids.get(wanted), elsewhere = issued.get(wanted);
+      const wanted = whole(ref, 'ref', { min: 1 }), session = sessions.get(id), node = session?.refs.ids.get(wanted), given = issued.get(wanted);
       // The page went elsewhere before this snapshot: its refs are kept as those of the page before, to say so.
       const changed = () => fail('not_found', 'The page in this tab has changed since the page.snapshot that gave the ref ' + ref + ': it went to another address or was loaded again, and its elements are others now. Take a new page.snapshot.');
       if (node === undefined && session?.refs.before.has(wanted)) throw changed();
-      if (node === undefined && elsewhere !== undefined && elsewhere !== id) throw fail('not_found', 'The ref ' + ref + ' was given by a page.snapshot of another tab (tabId ' + elsewhere + '), not of this one: name that tab with tabId, or take a page.snapshot of this one.');
+      if (node === undefined && given && given.tab !== id) throw fail('not_found', 'The ref ' + ref + ' was given by a page.snapshot of another tab (tabId ' + given.tab + '), not of this one: name that tab with tabId, or take a page.snapshot of this one.');
+      if (node === undefined && given) throw fail('not_found', 'The ref ' + ref + ' was given for an earlier page of this tab, or before the debugger was last put on it: its elements may be others now. Take a new page.snapshot.');
       if (node === undefined) throw fail('not_found', 'No page.snapshot of this tab has given the ref ' + ref + '. A ref belongs to the tab and the page whose snapshot listed it: take a page.snapshot of this tab and use a ref from it. (Refs are kept while the tab is debugged; it is let go after five minutes without a call.)');
       if (session.refs.page !== session.page) throw changed();
       const found = await raw(id, 'DOM.resolveNode', { backendNodeId: node }).catch(() => null);
@@ -639,11 +643,13 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
         const held = (await raw(id, 'Accessibility.getFullAXTree', { frameId: framesOf.get(node) }).catch(() => null))?.nodes;
         if (Array.isArray(held) && held.length) inside.set(node, { byId: new Map(held.map(one => [one.nodeId, one])), root: held.find(one => !one.parentId) || held[0], nodes: held });
       }
-      // The ref an element is listed by: the number the browser gives it, unless another tab was given that number (the
-      // pages of every tab number their elements alike), then one that no tab was given. One this page was given stays.
+      // The ref an element is listed by: the number the browser gives it, unless that number was given for another page
+      // (of this tab or another: their elements are numbered alike), then one that was given for none. One this page
+      // was given stays.
       const current = session.refs.page === listed ? session.refs.ids : new Map(), refOf = new Map([...current].map(([one, node]) => [node, one])), nodeOf = new Map();
       const numbered = node => {
-        if (!refOf.has(node)) refOf.set(node, issued.has(node) && issued.get(node) !== id ? ++unused : node);
+        const given = issued.get(node);
+        if (!refOf.has(node)) refOf.set(node, given && (given.tab !== id || given.page !== listed) ? ++unused : node);
         nodeOf.set(refOf.get(node), node);
         return refOf.get(node);
       };
@@ -679,7 +685,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
           const number = Number(/^ *\[(\d+)\]/.exec(one)?.[1]);
           if (!nodeOf.has(number)) continue;
           session.refs.ids.delete(number); session.refs.ids.set(number, nodeOf.get(number));
-          issued.delete(number); issued.set(number, id);
+          issued.delete(number); issued.set(number, { tab: id, page: listed });
         }
         for (const old of session.refs.ids.keys()) { if (session.refs.ids.size <= REFS_KEPT) break; session.refs.ids.delete(old); }
         for (const old of issued.keys()) { if (issued.size <= ISSUED_KEPT) break; issued.delete(old); }

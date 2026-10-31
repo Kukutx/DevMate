@@ -101,6 +101,17 @@ test('desktop.act acts only in the programs the owner named, which full access d
   // A name is taken without .exe.
   assert.deepEqual(queued.configure({ apps: ['Notepad.EXE'] }).settings.apps, ['notepad']);
   queued.close();
+  // An act that waits for that program to start is sent with the programs named when it is sent.
+  let later = { enabled: true, apps: ['notepad', 'winword'] };
+  const starting = host({ act: { control: 'button', name: 'Save', waiting: false } }, { ready: false });
+  const slowly = createDesktop({ platform: 'win32', spawnHost: starting.spawnHost, stored: value => value === undefined ? later : (later = value) });
+  const sent = slowly.call({ capability: 'desktop.act', input: { handle: 5, ref: 2, action: 'invoke' } });
+  await new Promise(resolve => setImmediate(resolve));
+  slowly.configure({ apps: ['winword'] });
+  starting.made[0].stdout.write('{"ready":true}\n');
+  await sent;
+  assert.deepEqual(starting.made[0].asked.at(-1).params.apps, ['winword']);
+  slowly.close();
 });
 
 test('the windows are read only once the owner has switched that on at the computer, or chosen full access, and a connected client can only switch it off', async t => {
@@ -200,10 +211,13 @@ test('desktop.snapshot reads a window\'s controls as indented lines, never a pas
   const based = createDesktop({ platform: 'win32', spawnHost: host({ snapshot: { nodes: nodes.slice(0, 1), more: false, base: 30000 } }).spawnHost, stored: on });
   assert.equal((await based.call({ capability: 'desktop.snapshot', input: { handle: 7 } })).text, '[30001] window "Settings" @0,0,800,600');
   based.close();
-  assert.deepEqual(made[0].asked.at(-1), { method: 'snapshot', params: { handle: 7, most: 300, budget: 15000, who: '' } });
+  const { base: first, ...asked } = made[0].asked.at(-1).params;
+  assert.deepEqual(asked, { handle: 7, most: 300, budget: 15000, who: '' });
+  // Where a snapshot's numbers begin is given by the runtime, a step further each time from a start of chance.
+  assert.ok(Number.isInteger(first) && first % 10000 === 0 && first > 0, String(first));
   // With words, the whole window is read and the lines that have them kept, whatever their case.
   assert.deepEqual(await desktop.call({ capability: 'desktop.snapshot', input: { handle: 7, query: 'SAVE', maxNodes: 10 } }), { handle: 7, text: '    [5] button "Save" (disabled)', nodes: 1, query: 'SAVE', matched: 1, untrusted: true });
-  assert.deepEqual(made[0].asked.at(-1).params, { handle: 7, most: 1500, budget: 15000, who: '' });
+  assert.deepEqual(made[0].asked.at(-1).params, { handle: 7, most: 1500, budget: 15000, who: '', base: first + 10000 });
   const cut = await desktop.call({ capability: 'desktop.snapshot', input: { handle: 7, maxNodes: 10 } });
   assert.equal(cut.nodes, 5); assert.equal(cut.truncated, undefined);
   desktop.close();
@@ -363,8 +377,9 @@ test('on Windows a control of a program the owner named is acted on by its own m
   // A field of several lines tells its program that its text changed, as when it is typed into.
   await act({ ref: notes, action: 'setValue', value: 'Hi' });
   assert.equal(await titled('Noted Hi'), 'Noted Hi');
-  // A rich text field takes text that begins as RTF does for formatting: refused; other text is put in.
-  await assert.rejects(act({ ref: rich, action: 'setValue', value: '{\\rtf1 x}' }), { code: 'invalid_input', message: /begins with \{\\rtf as formatting/ });
+  // A text that begins as RTF does is not handed to a rich text field, since older ones read it as formatting (this one,
+  // RichEdit 2.0 and later through WM_SETTEXT, would not); other text is put in.
+  for (const value of ['{\\rtf1 x}', '{\\urtf1 x}']) await assert.rejects(act({ ref: rich, action: 'setValue', value }), { code: 'invalid_input', message: /may read a text that begins with \{\\rtf or \{\\urtf as formatting/ }, value);
   assert.equal((await act({ ref: rich, action: 'setValue', value: 'plain' })).control, 'edit');
   // Not into a password field; not a button switched off nor a field read only; not what a classic control is not
   // pressed or filled by; not a ref no snapshot of this caller's gave.

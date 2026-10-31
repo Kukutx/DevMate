@@ -514,7 +514,7 @@ test('an element is found by its ref from the snapshot, by a selector, or by the
 });
 
 test('a ref is taken only on the tab and for the page whose snapshot gave it: not from another tab, not once the page has gone elsewhere or loaded again', async () => {
-  const { methods, say, sent, replies } = harness(shown({ 'Accessibility.getFullAXTree': shop() }));
+  const { methods, say, sent, replies, tabs } = harness(shown({ 'Accessibility.getFullAXTree': shop() }));
   const notGiven = ref => new RegExp('^No page\\.snapshot of this tab has given the ref ' + ref + '\\. A ref belongs to the tab and the page whose snapshot listed it: take a page\\.snapshot of this tab and use a ref from it\\.');
   // Before any snapshot a number is nobody's ref, and the browser is not asked for a node by it.
   await refuses(methods['page.click']({ ref: 13 }), 'not_found', notGiven(13));
@@ -530,6 +530,9 @@ test('a ref is taken only on the tab and for the page whose snapshot gave it: no
   const second = (await methods['page.snapshot']({ tabId: 2 })).text, other = Number(/\[(\d+)\] link "Home"/.exec(second)[1]);
   assert.ok(other > 2 ** 30 && !/\[13\]/.test(second), second);
   await refuses(methods['page.click']({ tabId: 2, ref: 13 }), 'not_found', elsewhere(13, 1));
+  tabs.front = 2;
+  await refuses(methods['page.click']({ ref: 13 }), 'not_found', elsewhere(13, 1));
+  tabs.front = 1;
   await refuses(methods['page.click']({ ref: other }), 'not_found', elsewhere(other, 2));
   assert.deepEqual(sent('DOM.resolveNode').filter(params => params.backendNodeId === 13).length, 1, 'only the click on tab 1 asked for the node');
   assert.deepEqual(await methods['page.click']({ tabId: 2, ref: other }), { tabId: 2, clicked: { x: 60, y: 40 } });
@@ -542,31 +545,37 @@ test('a ref is taken only on the tab and for the page whose snapshot gave it: no
   const asked = sent('DOM.resolveNode').length;
   await refuses(methods['page.click']({ ref: 13 }), 'not_found', /^The page in this tab has changed since the page\.snapshot that gave the ref 13: it went to another address or was loaded again, and its elements are others now\. Take a new page\.snapshot\.$/);
   assert.equal(sent('DOM.resolveNode').length, asked);
-  // A snapshot of the new page gives its refs: those of the lines it shows, and not those it left out.
-  await methods['page.snapshot']({ maxNodes: 10 });
-  assert.equal((await methods['page.inspect']({ ref: 17 })).tabId, 1);
+  // A snapshot of the new page gives its refs: those of the lines it shows, and not those it left out. The numbers the
+  // page before was given are not given again, though the browser may number the new page's elements alike (a page of
+  // another site starts from 1 again).
+  const next = (await methods['page.snapshot']({ maxNodes: 10 })).text, remember = Number(/\[(\d+)\] checkbox "Remember me"/.exec(next)[1]);
+  assert.ok(remember > 2 ** 30 && !/\[1[0-9]\]/.test(next), next);
+  assert.equal((await methods['page.inspect']({ ref: remember })).tabId, 1);
+  assert.deepEqual(sent('DOM.resolveNode').at(-1), { backendNodeId: 16 }, 'the new number stands for the element of the new page');
   // 19 was given for the page before, and is said to be of a page that changed; on a tab whose snapshot left it out,
-  // it was given by none.
+  // it was given by another tab.
   await refuses(methods['page.inspect']({ ref: 19 }), 'not_found', /has changed since the page\.snapshot that gave the ref 19/);
   await methods['page.snapshot']({ tabId: 3, maxNodes: 10 });
   await refuses(methods['page.inspect']({ tabId: 3, ref: 19 }), 'not_found', elsewhere(19, 1));
   // The page may go elsewhere while the browser is asked which node a ref is: the answer is then of the next page.
-  await methods['page.snapshot']();
+  const home = Number(/\[(\d+)\] link "Home"/.exec((await methods['page.snapshot']()).text)[1]);
   replies['DOM.resolveNode'] = ({ backendNodeId }) => { say(1, 'Page.frameNavigated', { frame: { id: 'main', url: 'https://app.example/elsewhere' } }); return { object: { type: 'object', objectId: 'next-page-' + backendNodeId } }; };
   const mouse = sent('Input.dispatchMouseEvent').length;
-  await refuses(methods['page.click']({ ref: 13 }), 'not_found', /has changed since the page\.snapshot that gave the ref 13/);
+  await refuses(methods['page.click']({ ref: home }), 'not_found', new RegExp('has changed since the page\\.snapshot that gave the ref ' + home));
   assert.equal(sent('Input.dispatchMouseEvent').length, mouse, 'nothing of the next page was clicked');
   assert.deepEqual(sent('Runtime.releaseObject').at(-1), { objectId: 'next-page-13' });
   delete replies['DOM.resolveNode'];
   // A snapshot of a page that went away while it was read gives none for the page that came.
   replies['Accessibility.getFullAXTree'] = () => { say(1, 'Page.frameNavigated', { frame: { id: 'main', url: 'https://app.example/later' } }); return shop(); };
   await methods['page.snapshot']();
-  await refuses(methods['page.inspect']({ ref: 13 }), 'not_found', /has changed since the page\.snapshot/);
-  // The refs go with the debugger: once it is taken off the tab, a ref is taken again only from a new snapshot.
+  await refuses(methods['page.inspect']({ ref: home }), 'not_found', /has changed since the page\.snapshot/);
+  // The refs go with the debugger: once it is taken off the tab, a ref is taken again only from a new snapshot, and
+  // one from before is not given again for what the page holds then.
   replies['Accessibility.getFullAXTree'] = shop();
-  await methods['page.snapshot']();
+  const last = Number(/\[(\d+)\] link "Home"/.exec((await methods['page.snapshot']()).text)[1]);
   await methods['page.debugStop']();
-  await refuses(methods['page.inspect']({ ref: 13 }), 'not_found', notGiven(13));
+  await refuses(methods['page.inspect']({ ref: last }), 'not_found', new RegExp('^The ref ' + last + ' was given for an earlier page of this tab, or before the debugger was last put on it'));
+  assert.notEqual(Number(/\[(\d+)\] link "Home"/.exec((await methods['page.snapshot']()).text)[1]), last);
 });
 
 test('page.snapshot lists the part of the page one element holds, by ref or selector, and keeps the lines that have the words asked for', async () => {
