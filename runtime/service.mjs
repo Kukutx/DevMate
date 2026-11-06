@@ -24,6 +24,7 @@ import { projectOverview } from './operations/projects.mjs';
 import { doctor } from './operations/doctor.mjs';
 import { snapshot } from './operations/snapshot.mjs';
 import { FOLLOWED_PROJECT, hash, now, projectScope } from './operations/shared.mjs';
+import { fileURLToPath } from 'node:url';
 
 // The service is the one registry every caller goes through: MCP, the CLI, the editor
 // hosts and the workbench. It owns authorization, idempotency and the lifetime of
@@ -103,6 +104,9 @@ export class DevMateService {
     this.desktop = createDesktop({ stored: value => value === undefined ? this.store.setting('engine-settings.desktop') : this.store.setting('engine-settings.desktop', value), fullAccess: () => this.fullAccess() });
     this.store = store || new Store(instanceRoot);
     this.instanceRoot = fs.realpathSync.native(instanceRoot);
+    // DevMate's command line, what a client or a browser on this computer is given to start. Beside this file in the
+    // source, and beside the one file the runtime is bundled into in a package.
+    this.cliEntry = fileURLToPath(new URL('./cli.mjs', import.meta.url));
     this.config = normalizeConfig(config);
     this.execution = new AbortController();
     this.activeCalls = new Set();

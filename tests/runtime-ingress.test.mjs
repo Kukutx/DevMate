@@ -180,8 +180,11 @@ function quickFixture() {
   const fetchImpl = async address => {
     if (!cloudflared.answers) throw new Error('connection refused');
     const args = spawned.at(-1)?.args || [], logfile = args.includes('--logfile') ? args[args.indexOf('--logfile') + 1] : null;
-    if (address.endsWith('/quicktunnel') && cloudflared.given && cloudflared.logs !== false && logfile && !(fs.existsSync(logfile) && fs.readFileSync(logfile, 'utf8').includes(cloudflared.given)))
-      fs.appendFileSync(logfile, 'INF |  https://' + cloudflared.given + '  |\n');
+    // (Each cloudflared once, after it started, for the name it was given.)
+    const last = spawned.at(-1);
+    if (address.endsWith('/quicktunnel') && cloudflared.given && cloudflared.logs !== false && logfile && last.logged !== cloudflared.given) {
+      fs.appendFileSync(logfile, 'INF |  https://' + cloudflared.given + '  |\n'); last.logged = cloudflared.given;
+    }
     const body = address.endsWith('/quicktunnel') ? { hostname: cloudflared.given || '' } : { status: cloudflared.ready ? 200 : 503, readyConnections: cloudflared.ready };
     return { ok: !address.endsWith('/ready') || cloudflared.ready > 0, json: async () => body };
   };
@@ -394,9 +397,13 @@ test('a host name is taken only where cloudflared itself said it was given it, a
   const { spawned, cloudflared, spawnImpl, terminateImpl, fetchImpl, kept, owned } = quickFixture();
   const watched = [], keeper = pid => watched.push(pid);
   const connect = (more = {}) => createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl, fetchImpl, owned, pickPort: async () => 47011, adoptMs: 300, keeper, ...more });
-  // A program that took the metrics port first answers with a host name of its own: cloudflared said nothing of it.
+  // A program that took the metrics port first answers with a host name of its own: cloudflared said nothing of it. The
+  // log has that name from an earlier tunnel's banner, and in the address a request went to: neither is this one's.
+  const log = path.join(temp, 'quick-tunnel.log');
+  fs.writeFileSync(log, 'INF |  https://not-the-tunnels.trycloudflare.com  |\n');
   cloudflared.given = 'not-the-tunnels.trycloudflare.com'; cloudflared.ready = 1; cloudflared.logs = false;
   const first = connect(); await first.start();
+  fs.appendFileSync(log, 'ERR Request failed dest=https://calm-host-fixture.trycloudflare.com/https://not-the-tunnels.trycloudflare.com connIndex=0\n');
   // Written down, it is watched by a keeper of its own from the start (./platform/tunnel-keeper.mjs).
   assert.deepEqual(watched, [spawned[0].child.pid]);
   await new Promise(resolve => setTimeout(resolve, 1500));
@@ -406,7 +413,9 @@ test('a host name is taken only where cloudflared itself said it was given it, a
   await until(() => first.publicUrl(), 'the address', 5000); await until(() => kept.record?.hostname, 'the host name written down');
   assert.equal(kept.record.hostname, 'calm-host-fixture.trycloudflare.com'); assert.ok(!JSON.stringify(kept.record).includes('key-of-this-start'));
   await first.stop({ keep: true });
-  // Taken back where it answers with that host name; not where something else answers there.
+  // Taken back where it answers with that host name, and watched by a keeper again; not where something else answers there.
+  const again = connect(); assert.equal((await again.start()).adopted, true); assert.deepEqual(watched, [spawned[0].child.pid, spawned[0].child.pid]);
+  await again.stop({ keep: true });
   cloudflared.given = 'someone-elses.trycloudflare.com';
   const other = connect(); await other.start();
   assert.notEqual(other.publicUrl(), 'https://someone-elses.trycloudflare.com/mcp/key-of-this-start'); assert.equal(spawned.length, 2, 'a new tunnel instead');
@@ -457,6 +466,8 @@ test('the ingress answers a quick tunnel only under the address the tunnel holds
   assert.equal(named('connection.address').status, 'info'); assert.match(named('connection.address').detail, /stays across restarts and updates of DevMate/); assert.match(named('connection.address').detail, /no event streams/);
   // Since when the address has stayed the same, and that it was kept from before a restart.
   assert.match(named('connection.address').detail, /Its address has stayed the same since 2026-10-31T00:00:00\.000Z, kept from before the last restart of DevMate\./);
+  // (The command line it is said against is the runtime's own, also where the runtime is one bundled file.)
+  assert.equal(runtime.service.cliEntry, path.resolve('runtime', 'cli.mjs'));
   assert.equal(named('clients').status, 'warn'); assert.match(named('clients').detail, /DevMate was added to claude-code, but what starts it there is gone/); assert.match(named('clients').fix, /devmate client add claude-code/);
   assert.match(named('security').fix, /devmate connect quick --new-address/);
   assert.match(named('security').detail, /quick tunnel has no sign-in/); assert.doesNotMatch(named('security').fix, /oauth/);

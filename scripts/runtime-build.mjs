@@ -11,8 +11,23 @@ const entries={
   'runtime/agent-channel.mjs':'runtime/agent-channel.mjs',
   'runtime/claude-permission-server.mjs':'runtime/agents/claude-permission-server.mjs',
   'runtime/client.mjs':'runtime/client.mjs',
-  'runtime/launcher.mjs':'runtime/launcher.mjs'
+  'runtime/launcher.mjs':'runtime/launcher.mjs',
+  // A process of its own beside a kept quick tunnel (../runtime/cloudflare-connection.mjs starts it by this path).
+  'runtime/platform/tunnel-keeper.mjs':'runtime/platform/tunnel-keeper.mjs'
 };
+// A bundled file names the files it starts or reads by where they are next to it (new URL('./x', import.meta.url)).
+// Bundled, that is next to the bundle, not next to the source it came from: each one has to be there in the package.
+export function besideEach(staging,outputs){
+  const missing=[];
+  for(const output of outputs.filter(file=>/\.(mjs|cjs|js)$/.test(file))){
+    const text=fs.readFileSync(path.join(staging,output),'utf8');
+    for(const found of text.matchAll(/new URL\(\s*(["'`])(\.\.?\/[^"'`]+)\1\s*,\s*import\.meta\.url\s*\)/g)){
+      const target=path.posix.normalize(path.posix.join(path.posix.dirname(output),found[2]));
+      if(!fs.existsSync(path.join(staging,target)))missing.push(output+' -> '+target);
+    }
+  }
+  if(missing.length)throw new Error('A bundled file names a file that is not in the package: '+[...new Set(missing)].join('; '));
+}
 function writeJson(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,JSON.stringify(value,null,2)+'\n');}
 function notices(root,inputs){
   const packages=new Map();
@@ -60,6 +75,7 @@ export async function buildRuntimeCandidate({root=path.resolve(import.meta.dirna
     for(const file of ['index.html','styles.css','app.js']){
       fs.copyFileSync(path.join(root,'workbench',file),path.join(staging,'workbench',file));outputs.push('workbench/'+file);
     }
+    besideEach(staging,outputs);
     // The browser extension is loaded from its folder as it is: every package carries that folder.
     fs.cpSync(path.join(root,'chrome-extension'),path.join(staging,'chrome-extension'),{recursive:true});
     const license=fs.readFileSync(path.join(root,'LICENSE'),'utf8');fs.writeFileSync(path.join(staging,'LICENSE'),license);

@@ -99,6 +99,10 @@ const SESSION_MARKS = new RegExp('^(VSCODE_|CLAUDE_AGENT_SDK_|CLAUDE_CODE_MESSAG
   'CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|HOST_SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|SDK_HAS_HOST_AUTH_REFRESH|EXECPATH|USER_EMAIL|ACCOUNT_UUID|ORGANIZATION_UUID|OAUTH_SCOPES|' +
   'DESKTOP_APP_VERSION|TERMINAL_MCP_TOOLS|REPORT_FINDINGS|SIMPLE|DISABLE_CRON|EAGER_FLUSH|ENABLE_ASK_USER_QUESTION_TOOL|ENABLE_SDK_FILE_CHECKPOINTING|STARTUP_FAILURE_RESULTS|DISABLE_TERMINAL_TITLE))$', 'i');
 
+// A connector left behind runs without a window of its own: on Windows only force ends it, and asking it first only
+// waited 2.5 seconds for nothing.
+const byForce = (pid, options) => processTree.terminatePidTree(pid, { ...options, ...(process.platform === 'win32' ? { gracefulWaitMs: 0 } : {}) });
+
 export async function startRuntime({
   instanceRoot,
   port,
@@ -185,7 +189,7 @@ export async function startRuntime({
     if (child && !childExited(child)) await terminateProcessTree(child);
     // No runtime holds this instance now: a quick tunnel kept for the one that should have started (a restart that
     // did not get this far) would forward the public address to a port nobody holds, which any program could take.
-    if (!(await status().catch(() => ({}))).processAlive) await ownedProcess(path.join(files.directory, 'quick-tunnel.json')).reap().catch(() => {});
+    if (!(await status().catch(() => ({}))).processAlive) await ownedProcess(path.join(files.directory, 'quick-tunnel.json'), { terminate: byForce }).reap().catch(() => {});
     throw error;
   }
 }
@@ -221,7 +225,7 @@ export async function stopRuntime({
     // a runtime that was killed left behind. (quick-tunnel.json and connector.json are where the connections write them
     // down.) One that could not be ended is said.
     const left = [];
-    if (!again) for (const name of ['quick-tunnel.json', 'connector.json']) await ownedProcess(path.join(files.directory, name)).reap().catch(error => { left.push(error.message); });
+    if (!again) for (const name of ['quick-tunnel.json', 'connector.json']) await ownedProcess(path.join(files.directory, name), { terminate: byForce }).reap().catch(error => { left.push(error.message); });
     return { stopped: true, alreadyStopped: true, instanceRoot: files.directory, ...(left.length ? { warning: left.join(' ') + ' Nothing of it was ended: run devmate stop again in a moment.' } : {}) };
   }
   const stoppable = current.record && ['ready', 'stopping', 'shutdown_failed'].includes(current.health?.status) &&
