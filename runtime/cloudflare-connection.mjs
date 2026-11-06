@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -40,7 +41,7 @@ export function keptQuickTunnel(instanceRoot) {
   catch { return null; }
 }
 /** Ends a quick tunnel a runtime of this instance left running: the connection is another one now. */
-export function endQuickTunnel(instanceRoot, options) { return ownedProcess(path.join(instanceRoot, QUICK_RECORD), options).reap(); }
+export function endQuickTunnel(instanceRoot, options) { return ownedProcess(path.join(instanceRoot, QUICK_RECORD), { terminate: endTunnel, ...options }).reap(); }
 
 // The key in the path of a quick tunnel's address: made once, kept in the instance. Taken away (devmate connect quick
 // --new-address), a new one is made at the next start, and the tunnel kept for the old one is not taken back.
@@ -48,9 +49,16 @@ const KEY_FILE = 'quick-tunnel.key', KEY = /^[A-Za-z0-9_-]{32}$/;
 export function quickTunnelKey(instanceRoot) {
   const file = path.join(instanceRoot, KEY_FILE);
   // (Made anew only where there is none, or none that is a key: a file that could not be read this moment, held by a
-  // scanner say, is no reason to give the owner another address.)
+  // scanner say, is no reason to give the owner another address. It is asked again for a moment first.)
   let kept = null;
-  try { kept = fs.readFileSync(file, 'utf8').trim(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  for (let attempt = 0; ; attempt++) {
+    try { kept = fs.readFileSync(file, 'utf8').trim(); break; }
+    catch (error) {
+      if (error.code === 'ENOENT') break;
+      if (attempt >= 20 || !['EBUSY', 'EPERM', 'EACCES'].includes(error.code)) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
   if (kept !== null && KEY.test(kept)) return kept;
   const key = randomBytes(24).toString('base64url');
   fs.writeFileSync(file, key + '\n', { mode: 0o600 });
@@ -62,11 +70,16 @@ export function forgetQuickTunnelKey(instanceRoot) { fs.rmSync(path.join(instanc
 // waited for nothing.
 const endTunnel = (pid, options) => processTree.terminatePidTree(pid, { ...options, ...(process.platform === 'win32' ? { gracefulWaitMs: 0 } : {}) });
 // The keeper of a quick tunnel (./platform/tunnel-keeper.mjs): a small Node process of its own, which outlives the
-// runtime as the tunnel does, and ends the tunnel once no runtime holds the instance for a while.
+// runtime as the tunnel does, and ends the tunnel once no runtime holds the instance for a while. It is given nothing of
+// the runtime's environment but what Node and the system need (no credential of a connection, no NODE_OPTIONS), and
+// works from the temporary folder, so that it holds no folder of the instance open. A second one for the same tunnel
+// (taken back by a runtime that cannot tell whether one runs) only looks as well.
+const KEEPER_ENV = new Set(['path', 'pathext', 'systemroot', 'windir', 'systemdrive', 'temp', 'tmp', 'tmpdir', 'home', 'userprofile', 'localappdata', 'xdg_runtime_dir']);
 function startKeeper(instanceRoot, pid) {
   try {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => KEEPER_ENV.has(name.toLowerCase())));
     const watcher = spawn(process.execPath, [fileURLToPath(new URL('./platform/tunnel-keeper.mjs', import.meta.url)), instanceRoot, String(pid)],
-      { cwd: instanceRoot, detached: true, stdio: 'ignore', windowsHide: true });
+      { cwd: os.tmpdir(), env, detached: true, stdio: 'ignore', windowsHide: true });
     watcher.on('error', () => {}); watcher.unref();
   } catch { /* the runtime's own stop, and the next start, still end it */ }
 }
@@ -107,12 +120,22 @@ export function normalizeCloudflareConfig(input) {
 }
 
 export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, env = process.env,
-  spawnImpl = spawn, terminateImpl = processTree.terminateProcessTree, fetchImpl = globalThis.fetch, pickPort = freePort,
+  spawnImpl = spawn, fetchImpl = globalThis.fetch, pickPort = freePort,
+  // (A quick tunnel's cloudflared has no window: on Windows only force ends it, see endTunnel.)
+  terminateImpl = config?.kind === 'cloudflare-quick' && process.platform === 'win32' ? child => processTree.terminateProcessTree(child, { gracefulWaitMs: 0 }) : processTree.terminateProcessTree,
   lookMs = LOOK_MS, lostMs = LOST_MS, adoptMs = ADOPT_MS, now = Date.now,
-  // Whether cloudflared itself said it was given this host name: its log, in the instance's own folder. The metrics port
-  // is picked free and then taken by cloudflared, and a program that took it first could answer with a host name of
-  // its own choosing, to which the key would then be sent.
-  created = hostname => { try { return !instanceRoot || fs.readFileSync(path.join(instanceRoot, QUICK_LOG), 'utf8').includes('https://' + hostname); } catch { return false; } },
+  // Whether cloudflared itself said it was given this host name: the banner it writes in its log, in the instance's own
+  // folder, since it was started (from: where the log ended then). The metrics port is picked free and then taken by
+  // cloudflared, and a program that took it first could answer with a host name of its own choosing, to which the key
+  // would then be sent. (Not anywhere in the log: it keeps earlier tunnels' banners, and the addresses requests went to.)
+  created = (hostname, from = 0) => {
+    if (!instanceRoot) return true;
+    try {
+      const file = path.join(instanceRoot, QUICK_LOG), size = fs.statSync(file).size, start = Math.min(from, size), length = Math.min(size - start, LOG_KEPT), buffer = Buffer.alloc(length), fd = fs.openSync(file, 'r');
+      try { fs.readSync(fd, buffer, 0, length, start); } finally { fs.closeSync(fd); }
+      return new RegExp('\\|\\s+https://' + hostname.replaceAll('.', '\\.') + '\\s+\\|').test(buffer.toString('utf8'));
+    } catch { return false; }
+  },
   // Only a process this module really started is written down; a test double has none to find again.
   owned = spawnImpl === spawn && instanceRoot ? ownedProcess(path.join(instanceRoot, config?.kind === 'cloudflare-quick' ? QUICK_RECORD : 'connector.json'), config?.kind === 'cloudflare-quick' ? { terminate: endTunnel } : {}) : null,
   // What another connection of a runtime that was killed left running (it is written down apart from a quick tunnel).
@@ -131,7 +154,8 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
   // left running for the next runtime: one nobody wrote down, nobody could end.
   // emptySince, silentSince: since when it holds no connection, since when it has not answered; counted in time this
   // runtime was awake to look (lookedAt: the last look).
-  let lookTimer = null, emptySince = null, silentSince = null, lookedAt = null, misses = 0, recorded = false;
+  // logFrom: where cloudflared's log ended when this connector was started, where its banner is looked for.
+  let lookTimer = null, emptySince = null, silentSince = null, lookedAt = null, misses = 0, recorded = false, logFrom = 0;
   const publicUrl = () => quick ? assigned : settings.publicUrl;
   const serial = action => { const work = queue.then(action); queue = work.catch(() => {}); return work; };
   const recovery = createConnectionRecovery({ restart: () => start(),
@@ -241,6 +265,8 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
     }
     if (!hostname || hostname !== record.hostname) return false;
     child = { pid: record.pid, adopted: true }; metrics = record.metrics; assigned = 'https://' + hostname + target.pathname; recorded = true;
+    // (Whether its keeper still runs is not known here, say where it failed: one more, which only looks as well.)
+    keeper?.(record.pid);
     since = typeof record.since === 'string' ? record.since : null; diagnostic = ''; lastError = null; connections = 0; phase = 'connecting';
     return true;
   }
@@ -260,12 +286,12 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
   }
   async function learnt(proc) {
     const hostname = metrics ? await hostnameOf(metrics) : null;
-    if (!hostname || child !== proc || assigned || !created(hostname)) return false;
+    if (!hostname || child !== proc || assigned || !created(hostname, logFrom)) return false;
     assigned = 'https://' + hostname + target.pathname; since = new Date(now()).toISOString();
     // Since when it has had its address is added to what was written down when it started, at once: asking the system
     // who the process is again takes seconds, and a restart in those seconds kept a record without it. (Written in
     // full where nothing was written down at the start.)
-    if (current(proc)() && (recorded ? !owned?.amend?.(proc.pid, { since, hostname }) : true)) { if (await remembered(proc) && child === proc) recorded = true; }
+    if (current(proc)() && (recorded ? !owned?.amend?.(proc.pid, { since, hostname }) : true)) { if (await remembered(proc) && child === proc) { recorded = true; keeper?.(proc.pid); } }
     return true;
   }
   function start() {
@@ -288,6 +314,7 @@ export function createCloudflareConnection({ config, localMcpUrl, instanceRoot, 
         const port = await pickPort();
         metrics = 'http://127.0.0.1:' + port;
         try { if (fs.statSync(logFile).size > LOG_KEPT) fs.renameSync(logFile, logFile + '.1'); } catch { /* none yet */ }
+        try { logFrom = fs.statSync(logFile).size; } catch { logFrom = 0; }
         const proc = spawnImpl(settings.executable, ['tunnel', '--no-autoupdate', '--metrics', '127.0.0.1:' + port, ...(logFile ? ['--logfile', logFile] : []), '--url', 'http://127.0.0.1:' + target.port],
           { cwd: instanceRoot, env: environment, shell: false, windowsHide: true, detached: true, stdio: 'ignore' });
         child = proc;

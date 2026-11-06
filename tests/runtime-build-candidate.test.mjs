@@ -8,7 +8,7 @@ import {spawn,spawnSync} from 'node:child_process';
 import {VERSION} from '../runtime/version.mjs';
 import {EXTENSION_ORIGIN} from '../runtime/chrome.mjs';
 import {frame,frames} from '../runtime/chrome-host.mjs';
-import {buildRuntimeCandidate} from '../scripts/runtime-build.mjs';
+import {besideEach,buildRuntimeCandidate} from '../scripts/runtime-build.mjs';
 const require=createRequire(import.meta.url);
 test('candidate is self contained and its Obsidian main materializes a verified native runtime without starting it',{timeout:180000},async t=>{
   const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-candidate 中文 '));t.after(()=>fs.rmSync(temporary,{recursive:true,force:true,maxRetries:5,retryDelay:100}));
@@ -98,4 +98,17 @@ test('candidate is self contained and its Obsidian main materializes a verified 
   assert.equal(registered.child.exitCode,null,'another program registered from the start is no update: '+registered.said());
   // And it ends, as ever, when the browser closes its end.
   for(const one of [staying,registered]){one.child.stdin.end();assert.equal(await within(one.ended,15000,'the host did not end when the browser left'),0);}
+});
+
+test('a bundled file that names a file beside it which is not in the package fails the build',()=>{
+  // The keeper of a quick tunnel was started by a path that, bundled, led nowhere: nothing said so until a review.
+  const staging=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-beside-'));
+  try{
+    fs.mkdirSync(path.join(staging,'runtime','platform'),{recursive:true});fs.mkdirSync(path.join(staging,'workbench'));
+    fs.writeFileSync(path.join(staging,'workbench','index.html'),'');fs.writeFileSync(path.join(staging,'runtime','cli.mjs'),'');
+    fs.writeFileSync(path.join(staging,'runtime','main.mjs'),'const a=new URL("./cli.mjs",import.meta.url),b=new URL(\'../workbench/index.html\', import.meta.url);\nconst c=new URL("./platform/tunnel-keeper.mjs",import.meta.url),d=new URL("../cli.mjs",import.meta.url);\n');
+    assert.throws(()=>besideEach(staging,['runtime/main.mjs']),/runtime\/main\.mjs -> runtime\/platform\/tunnel-keeper\.mjs; runtime\/main\.mjs -> cli\.mjs$/);
+    fs.writeFileSync(path.join(staging,'runtime','platform','tunnel-keeper.mjs'),'');fs.writeFileSync(path.join(staging,'cli.mjs'),'');
+    besideEach(staging,['runtime/main.mjs']);
+  }finally{fs.rmSync(staging,{recursive:true,force:true});}
 });

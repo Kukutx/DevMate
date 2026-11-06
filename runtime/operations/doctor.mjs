@@ -1,5 +1,4 @@
 import os from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { createChromeRegistration } from '../platform/chrome-registration.mjs';
 import { createClientRegistration } from '../platform/client-registration.mjs';
 import { SWITCH_OFF } from '../desktop.mjs';
@@ -13,6 +12,9 @@ import { named, within } from './shared.mjs';
  * One list of everything that decides whether this installation works, each
  * with the concrete next step. Nothing here starts a model request.
  */
+// The command line a client or a browser is given to start, as the service knows it (in a package the runtime is one
+// bundled file, and this file's folder is not where the command line is).
+const cliOf = service => service.cliEntry;
 export async function doctor(service) {
   const checks = [];
   // Each entry is one line, wherever it is shown (a terminal, an editor's output, a side panel, a report): words
@@ -176,7 +178,7 @@ export async function doctor(service) {
   // The owner's browser: connected, registered and waiting for a browser to be opened, or not set up. A quick look:
   // the system is asked about the registration only where this instance has written one.
   const browser = service.browser.status();
-  const registration = browser.connected ? null : await (service.browserHost || createChromeRegistration({ instanceRoot: service.instanceRoot, cli: fileURLToPath(new URL('../cli.mjs', import.meta.url)) })).status({ ask: false }).catch(() => null);
+  const registration = browser.connected ? null : await (service.browserHost || createChromeRegistration({ instanceRoot: service.instanceRoot, cli: cliOf(service) })).status({ ask: false }).catch(() => null);
   // Several browsers: one is used, and which one is the owner's to say in the panel of the browser they mean. A
   // browser's name is what its extension said of itself, so it stands here as a name (in quotes, cut short).
   const others = (browser.connections || []).slice(1).map(one => named(one.browser || 'a browser', 40) + (one.paused ? ' (paused)' : '')).join(', ');
@@ -189,7 +191,7 @@ export async function doctor(service) {
   // The clients on this computer DevMate was added to (devmate client add): said where there is one, and where one
   // was written for a Node that is gone or another instance.
   try {
-    const { clients } = createClientRegistration({ instanceRoot: service.instanceRoot, cli: fileURLToPath(new URL('../cli.mjs', import.meta.url)) }).status();
+    const { clients } = createClientRegistration({ instanceRoot: service.instanceRoot, cli: cliOf(service) }).status();
     const added = clients.filter(item => item.registered), stale = added.filter(item => item.stale), list = items => items.map(item => item.client).join(', ');
     if (stale.length) check('clients', 'warn', 'DevMate was added to ' + list(stale) + ', but what starts it there is gone (the Node it was added with, or DevMate\'s bridge in the instance directory): it cannot start DevMate.','Add it again: ' + stale.map(item => 'devmate client add ' + item.client).join('; '));
     else if (added.length) check('clients', 'ok', 'DevMate is one of the MCP servers of ' + list(added) + ' on this computer.');

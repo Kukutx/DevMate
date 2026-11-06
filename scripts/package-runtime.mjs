@@ -99,7 +99,7 @@ export async function packageRuntime(kind,{candidate,out,manifestPath,pluginMani
       assert.deepEqual(packaged.contributes,manifest.contributes);assert.deepEqual(packaged.activationEvents,manifest.activationEvents);
       for(const file of ['extension.vsixmanifest','[Content_Types].xml','extension/'+manifest.main.replace(/^\.\//,''),'extension/'+manifest.icon,
         'extension/runtime/main.mjs','extension/runtime/cli.mjs','extension/runtime/agent-channel.mjs','extension/runtime/claude-permission-server.mjs',
-        'extension/runtime/host-client.cjs','extension/runtime/client.mjs','extension/runtime/launcher.mjs',
+        'extension/runtime/host-client.cjs','extension/runtime/client.mjs','extension/runtime/launcher.mjs','extension/runtime/platform/tunnel-keeper.mjs',
         'extension/LICENSE.txt','extension/readme.md','extension/changelog.md','extension/package.nls.json','extension/package.nls.zh-cn.json','extension/vscode-host/walkthrough/start.md','extension/vscode-host/walkthrough/share.md','extension/vscode-host/walkthrough/connect.md','extension/workbench/index.html','extension/workbench/bridge.bundle.js','extension/workbench/styles.css','extension/workbench/app.js','extension/chrome-extension/manifest.json','extension/chrome-extension/background.js','extension/plugin.json','extension/THIRD_PARTY_NOTICES.txt'])assert.ok(files.has(file),'Missing VSIX file: '+file);
       assert.equal([...files.keys()].some(file=>file.startsWith('extension/gateway/')||file.startsWith('extension/node_modules/')),false);
       for(const [name,data]of files)if(name.startsWith('extension/')){
@@ -117,7 +117,7 @@ export async function packageRuntime(kind,{candidate,out,manifestPath,pluginMani
       assert.deepEqual([...files.keys()].sort(),['main.js','manifest.json','styles.css']);
       const plugin=JSON.parse(files.get('manifest.json'));assert.equal(plugin.version,manifest.version);assert.equal(plugin.isDesktopOnly,true);
       const main=files.get('main.js').toString('utf8');assert.ok(main.includes(build.runtimeAssetId),'Obsidian package is missing its embedded runtime identity.');
-      for(const entry of ['runtime/main.mjs','runtime/cli.mjs','runtime/agent-channel.mjs','runtime/claude-permission-server.mjs','workbench/index.html'])assert.ok(main.includes(entry),'Missing embedded runtime asset: '+entry);
+      for(const entry of ['runtime/main.mjs','runtime/cli.mjs','runtime/agent-channel.mjs','runtime/claude-permission-server.mjs','runtime/platform/tunnel-keeper.mjs','workbench/index.html'])assert.ok(main.includes(entry),'Missing embedded runtime asset: '+entry);
       assert.ok(main.includes('materializeRuntimeAssets'));assert.equal(main.includes('contentBase64'),false,'The Obsidian plugin must carry its runtime as readable text.');
       for(const [name,data]of files)assert.equal(hash(data),hash(fs.readFileSync(path.join(candidate,'obsidian',name))));
     }
