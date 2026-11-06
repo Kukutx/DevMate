@@ -6,9 +6,9 @@ import { actor, commandShape, id, listOptions, mutation, oneCommand, projectScop
 // that outlive the request that started them (job.*).
 export function defineCommandOperations(service, add) {
   // The hint is a complete call. Without waitMs a read answers at once, and a model following the hint would poll in a tight loop.
-  const processOutput = result => (result.skippedBytes ? '[earlier output omitted: ' + result.skippedBytes + ' bytes; page it with process_read cursor:0]\n' : '') + result.output +
-    '\n[' + (result.status === 'running' ? 'still running; process_read {id:"' + result.id + '", cursor:' + result.cursor + ', waitMs:30000} waits for more output, process_stop ends it'
-      : result.status + (result.exitCode !== null ? ', exit code ' + result.exitCode : '')) + ']';
+  const processOutput = (result, own = text => text) => (result.skippedBytes ? own('[earlier output omitted: ' + result.skippedBytes + ' bytes; page it with process_read cursor:0]') + '\n' : '') + result.output +
+    '\n' + own('[' + (result.status === 'running' ? 'still running; process_read {id:"' + result.id + '", cursor:' + result.cursor + ', waitMs:30000} waits for more output, process_stop ends it'
+      : result.status + (result.exitCode !== null ? ', exit code ' + result.exitCode : '')) + ']');
   const processMeta = ['id', 'status', 'exitCode', 'cursor', 'hasMore'];
   const projectOf = args => service.processes.projectOf(args.id);
   // A wait that ended because the runtime is stopping is not an observation of the command: say so instead of "still running".

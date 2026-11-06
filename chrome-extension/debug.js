@@ -5,11 +5,19 @@
 //
 // Chrome shows a bar while a tab is debugged. That is Chrome's rule, and the owner's way of seeing it. A tab is let go
 // after five minutes without a call, at once with page.debugStop, and when the owner pauses DevMate in the panel.
-// Only the page's own frame is covered: a frame inside it (an iframe) is shown in the snapshot with its address, and
-// what that frame holds is not reached. What a component of the page holds (a shadow tree) is.
+// A frame inside the page (an iframe) is shown in the snapshot with its address, and what it holds is listed under it
+// where the browser draws it in the same process (a page of the same site); a page of another site in a frame is not
+// reached. What a component of the page holds (a shadow tree) is.
 
-export const DEBUG_READ_ONLY = Object.freeze(['page.console', 'page.network', 'page.networkRequest', 'page.snapshot', 'page.inspect', 'page.storage', 'page.waitFor']);
+export const DEBUG_READ_ONLY = Object.freeze(['page.console', 'page.network', 'page.networkRequest', 'page.snapshot', 'page.inspect', 'page.storage', 'page.waitFor', 'page.tools']);
 const IDLE_MS = 5 * 60 * 1000, KEPT = 500;
+// How many of the refs the snapshots of one page gave are taken: the latest ones.
+const REFS_KEPT = 20000;
+// How many refs are remembered as given on a tab, so that no other tab is given the same number; and where the numbers
+// begin that are given instead (see numbered in page.snapshot), far above those a browser gives its elements.
+const ISSUED_KEPT = 200000, FRESH_FROM = 2 ** 30;
+// Of how many frames of a page a snapshot lists what they hold.
+const FRAMES_READ = 10;
 // How long a tab is given to answer the first thing the debugger asks of it (see open()).
 const SILENT_MS = 5000;
 // How long each asking for a picture of a tab that is put away is given before it is asked for again, and at last
@@ -246,6 +254,10 @@ function look(names, most, real) {
     ...(top ? { coveredBy: '<' + top.tagName.toLowerCase() + (top.id ? '#' + top.id : '') + '>' } : {}),
     styles: Object.fromEntries(names.map(name => [name, style.getPropertyValue(name)])), html: html.slice(0, most), ...(html.length > most ? { htmlTruncated: true, htmlChars: html.length } : {}) };
 }
+// What kind of file field an element is: one that takes one file, several, or none at all.
+function fileField() {
+  return this.tagName === 'INPUT' && String(this.type).toLowerCase() === 'file' ? (this.multiple ? 'several' : 'one') : null;
+}
 function stores(withValues) {
   const read = name => {
     try {
@@ -255,15 +267,44 @@ function stores(withValues) {
   };
   return { origin: location.origin, localStorage: read('localStorage'), sessionStorage: read('sessionStorage') };
 }
+// What the page offers an agent to do (WebMCP): the tools it registered, as plain data. null where the browser gives
+// the page no WebMCP. Older browsers hang it on navigator, newer ones on document.
+async function offered() {
+  const context = document.modelContext || navigator.modelContext;
+  if (!context || typeof context.getTools !== 'function') return null;
+  const plain = value => { try { return JSON.parse(JSON.stringify(value ?? null)); } catch { return null; } };
+  return [...await context.getTools()].slice(0, 200).map(tool => ({ name: String(tool.name), ...(tool.title ? { title: String(tool.title).slice(0, 200) } : {}), description: String(tool.description ?? '').slice(0, 2000),
+    inputSchema: plain(typeof tool.inputSchema === 'string' ? (() => { try { return JSON.parse(tool.inputSchema); } catch { return tool.inputSchema; } })() : tool.inputSchema), ...(tool.annotations ? { annotations: plain(tool.annotations) } : {}) }));
+}
+// One of those tools, run with its input; what it answers, as plain data where it is that, and as text where not.
+async function calling(name, input) {
+  const context = document.modelContext || navigator.modelContext;
+  if (!context || typeof context.executeTool !== 'function') return { problem: 'none' };
+  const tools = [...await context.getTools()], tool = tools.find(one => one.name === name);
+  if (!tool) return { problem: 'unknown', names: tools.slice(0, 50).map(one => String(one.name)) };
+  let result = await context.executeTool(tool, input);
+  // Chrome hands a tool's answer over as JSON text (seen in Chrome 156): it is read back as what it says.
+  if (typeof result === 'string') { try { result = JSON.parse(result); } catch { /* text, as it is */ } }
+  try { return { result: JSON.parse(JSON.stringify(result ?? null)) }; } catch { return { result: String(result) }; }
+}
 const inPage = (work, ...given) => '(' + work + ')(' + given.map(value => JSON.stringify(value)).join(', ') + ')';
 
 /**
  * target(tabId) resolves the tab a method works on (the one named, or the one in front). The clock and the timers
  * are passed in so that tests can run without waiting. onChange tells the panel which tabs are being debugged.
  */
-export function createDebugger(chrome, { target, clock = () => Date.now(), schedule = (run, ms) => setTimeout(run, ms), cancel = clearTimeout, pause = ms => new Promise(resolve => setTimeout(resolve, ms)), onChange = () => {} } = {}) {
-  const sessions = new Map(), opening = new Map();
-  let listening = false;
+// refsFrom: where the refs of this start of the extension begin, by chance, so that a ref given before the extension
+// started anew (it is reloaded with an update, and the browser may stop its background when idle) names nothing now.
+export function createDebugger(chrome, { target, clock = () => Date.now(), schedule = (run, ms) => setTimeout(run, ms), cancel = clearTimeout, pause = ms => new Promise(resolve => setTimeout(resolve, ms)), onChange = () => {},
+  refsFrom = (1 + Math.floor(Math.random() * 999)) * 1000000 } = {}) {
+  const sessions = new Map(), opening = new Map(), opened = new Map();
+  // issued: the tab and the page each ref was given for. A number given for one page is not given for another, of
+  // this tab or of another (a page of another site, drawn by another process, numbers its elements from 1 again), so
+  // a ref taken from one snapshot cannot name an element of another page: the tab in front, which may have changed
+  // meanwhile, or the next page of its own tab. pages: the pages of every tab are counted together, while the
+  // extension runs, so that no two have the same number (session.page).
+  const issued = new Map();
+  let listening = false, unused = refsFrom + FRESH_FROM, pages = 0;
   const raw = (tabId, method, params = {}) => chrome.debugger.sendCommand({ tabId }, method, params);
   const command = (tabId, method, params) => raw(tabId, method, params).catch(error => { throw fail('browser_error', method + ' failed: ' + said(error)); });
   const dialogOf = session => session.dialog.type + ': ' + JSON.stringify(cut(session.dialog.message, 300));
@@ -291,8 +332,9 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       note(session, session.console, { level: 'dialog', text: dialogOf(session) });
       for (const wake of [...session.waiters]) wake();
     } else if (method === 'Page.javascriptDialogClosed') session.dialog = null;
-    // Where one page ends and the next begins, in the list of what was printed.
-    else if (method === 'Page.frameNavigated') { if (!params.frame?.parentId) note(session, session.console, { level: 'navigation', text: 'Went to ' + cut(params.frame?.url, 500) }); }
+    // Where one page ends and the next begins, in the list of what was printed. The elements of the page that ends go
+    // with it: the refs a snapshot gave for it are not taken for the next one (see element).
+    else if (method === 'Page.frameNavigated') { if (!params.frame?.parentId) { session.page = ++pages; note(session, session.console, { level: 'navigation', text: 'Went to ' + cut(params.frame?.url, 500) }); } }
     else if (method === 'Network.requestWillBeSent') {
       note(session, session.requests, { requestId: params.requestId, method: params.request?.method, url: cut(params.request?.url, 500), type: params.type, started: params.timestamp,
         requestHeaders: headers(params.request?.headers), hasBody: params.request?.hasPostData === true });
@@ -332,8 +374,12 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       throw fail('browser_error', /cannot access|chrome:|chrome-extension:|web store/i.test(said(error)) ? 'The browser does not let a page of its own, or of the Web Store, be debugged.' : 'The browser did not attach the debugger to this tab (' + said(error) + ').');
     });
     // Each of the two lists counts what it lost itself, once it is full.
-    const session = { tabId, seq: 0, since: clock(), console: Object.assign([], { dropped: 0 }), requests: Object.assign([], { dropped: 0 }), byId: new Map(), waiters: new Set(), dialog: null, timer: null, awake: false, waking: null, put: false, undrawn: false, lent: 0 };
+    // page counts the pages the tab has gone to while it is debugged; refs are those the snapshots of one of them gave,
+    // each with the element it names (ids), and those of the page before.
+    const session = { tabId, seq: 0, since: clock(), console: Object.assign([], { dropped: 0 }), requests: Object.assign([], { dropped: 0 }), byId: new Map(), waiters: new Set(), dialog: null, timer: null, awake: false, waking: null, put: false, undrawn: false, lent: 0,
+      page: ++pages, refs: { page: 0, ids: new Map(), before: new Map() } };
     sessions.set(tabId, session);
+    opened.set(tabId, (opened.get(tabId) || 0) + 1);
     try {
       // A page that was showing a dialog before the debugger came answers nothing, and that dialog cannot be answered
       // through the debugger: the browser says none is showing (seen in a real Chrome). So the first thing asked of
@@ -459,9 +505,22 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
   }
 
   // The element a method acts on: by its number in the last snapshot, by a CSS selector, or by the text it shows.
+  // A ref is taken only on the tab, and for the page, whose snapshot gave it. It is the number the browser gives a node,
+  // and that number means nothing on another tab, while the page that comes next in this one may give it to something
+  // else: such a ref would reach another element than the one that was listed.
   async function element(id, { ref, selector, text: shown }) {
     if (ref !== undefined) {
-      const found = await raw(id, 'DOM.resolveNode', { backendNodeId: whole(ref, 'ref', { min: 1 }) }).catch(() => null);
+      const wanted = whole(ref, 'ref', { min: 1 }), session = sessions.get(id), node = session?.refs.ids.get(wanted), given = issued.get(wanted);
+      // The page went elsewhere before this snapshot: its refs are kept as those of the page before, to say so.
+      const changed = () => fail('not_found', 'The page in this tab has changed since the page.snapshot that gave the ref ' + ref + ': it went to another address or was loaded again, and its elements are others now. Take a new page.snapshot.');
+      if (node === undefined && session?.refs.before.has(wanted)) throw changed();
+      if (node === undefined && given && given.tab !== id) throw fail('not_found', 'The ref ' + ref + ' was given by a page.snapshot of another tab (tabId ' + given.tab + '), not of this one: name that tab with tabId, or take a page.snapshot of this one.');
+      if (node === undefined && given) throw fail('not_found', 'The ref ' + ref + ' was given for an earlier page of this tab, or before the debugger was last put on it: its elements may be others now. Take a new page.snapshot.');
+      if (node === undefined) throw fail('not_found', 'No page.snapshot of this tab has given the ref ' + ref + '. A ref belongs to the tab and the page whose snapshot listed it: take a page.snapshot of this tab and use a ref from it. (Refs are kept while the tab is debugged; it is let go after five minutes without a call.)');
+      if (session.refs.page !== session.page) throw changed();
+      const found = await raw(id, 'DOM.resolveNode', { backendNodeId: node }).catch(() => null);
+      // The page may have gone elsewhere while the browser was asked: the number then names a node of the next page.
+      if (session.refs.page !== session.page) { if (found?.object?.objectId) void raw(id, 'Runtime.releaseObject', { objectId: found.object.objectId }).catch(() => {}); throw changed(); }
       if (!found?.object?.objectId) throw fail('not_found', 'No element has the ref ' + ref + ' any more. Take a new page.snapshot.');
       return found.object.objectId;
     }
@@ -471,7 +530,7 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     if (answer.exceptionDetails) throw fail('invalid_input', 'The selector is not valid: ' + cut(answer.exceptionDetails.exception?.description || answer.exceptionDetails.text, 300));
     // A text is looked for in the page and in the components that show their inside, a selector in the page alone.
     if (!answer.result?.objectId) throw fail('not_found', 'No element on the page matches ' + (selector !== undefined ? 'the selector ' + selector : 'the text "' + shown + '"') +
-      '. page.snapshot lists what is there with a ref for each, also inside a component that keeps its inside to itself. What is inside a frame (iframe) is not reached.');
+      '. page.snapshot lists what is there with a ref for each, also inside a component that keeps its inside to itself and inside a frame (iframe) of the same site: work those by ref. A selector and a text look in the page itself.');
     return answer.result.objectId;
   }
   // The middle of an element as it is drawn (of its first box), where it has one.
@@ -548,44 +607,94 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       else Object.assign(result, { body: body.body.slice(0, most) }, body.body.length > most ? { truncated: true, totalChars: body.body.length } : {});
       return { ...result, untrusted: true };
     },
-    'page.snapshot': async ({ tabId, interactiveOnly, maxNodes } = {}) => {
-      const most = Math.min(1500, whole(maxNodes, 'maxNodes', { optional: true, min: 10 }) ?? 300), { id, tab } = await page(tabId);
+    // The whole page, or the part of it that one element holds (ref or selector); query keeps the lines that have it.
+    'page.snapshot': async ({ tabId, interactiveOnly, maxNodes, ref, selector, query } = {}) => {
+      const most = Math.min(1500, whole(maxNodes, 'maxNodes', { optional: true, min: 10 }) ?? 300), wanted = query === '' ? undefined : text(query, 'query', { optional: true, max: 200 });
+      const { id, tab, session } = await page(tabId), listed = session.page;
+      // The element whose part of the page is asked for, by the number the browser gives it (as a ref is).
+      const part = ref !== undefined ? (await element(id, { ref }), session.refs.ids.get(ref)) : selector !== undefined ? (await raw(id, 'DOM.describeNode', { objectId: await element(id, { selector }) }).catch(() => null))?.node?.backendNodeId : undefined;
+      if (selector !== undefined && part === undefined) throw fail('not_found', 'The browser did not say which element the selector ' + selector + ' found. Name it by its ref from page.snapshot.');
       await raw(id, 'Accessibility.enable').catch(() => {});
       const { nodes } = await command(id, 'Accessibility.getFullAXTree'), byId = new Map(nodes.map(node => [node.nodeId, node]));
       // A frame of the page (an iframe) holds another page, which is not in this list. It is shown with the address
-      // of that page, named or not, so that a page whose content is in a frame does not look empty.
+      // of that page, named or not, so that a page whose content is in a frame does not look empty. Where that page is
+      // drawn by the same process as this one (a page of the same site), the browser gives its elements as well: they
+      // are listed under the frame, with refs like any other, for the first FRAMES_READ such frames. A page of another
+      // site is drawn elsewhere, and what it holds is not reached from here.
       // The address is asked for the first hundred frames as they are listed; one beyond those is shown without. A frame that
       // has no page of its own yet (about:blank) is shown with what it was told to load, and one whose content is
       // written into the page itself (srcdoc) has no address a tab could open.
       // Only an address a tab can be opened at is shown (http or https), not one that is a script or holds the content itself.
-      const framed = [], frames = new Map(), web = address => /^https?:\/\//i.test(address) ? address : '';
+      // frames: address of each frame by its node; inside: the tree of what a frame holds, where the browser gave it.
+      const framed = [], frames = new Map(), framesOf = new Map(), inside = new Map(), web = address => /^https?:\/\//i.test(address) ? address : '';
       for (const stack = [nodes.find(node => !node.parentId) || nodes[0]]; stack.length;) {
         const node = stack.pop();
         if (!node) continue;
-        if (!node.ignored && FRAMES.has(node.role?.value)) { framed.push(node); frames.set(node.nodeId, ''); }
+        if (!node.ignored && FRAMES.has(node.role?.value)) { framed.push(node); frames.set(node, ''); }
         for (const child of [...(node.childIds || [])].reverse()) stack.push(byId.get(child));
       }
       await Promise.all(framed.filter(node => node.backendDOMNodeId).slice(0, 100).map(async node => {
         const told = (await raw(id, 'DOM.describeNode', { backendNodeId: node.backendDOMNodeId }).catch(() => null))?.node, given = told?.attributes || [], named = name => { const at = given.indexOf(name); return at >= 0 && at % 2 === 0 ? given[at + 1] : undefined; };
         let address = web(told?.contentDocument?.documentURL || '');
         if (!address && named('srcdoc') === undefined && named('src')) { try { address = web(new URL(named('src'), tab.url || undefined).href); } catch { address = ''; } }
-        frames.set(node.nodeId, address);
+        frames.set(node, address);
+        if (told?.frameId) framesOf.set(node, told.frameId);
       }));
+      // A frame of another site has an id too, but no tree here: only those whose tree came back count.
+      for (const node of framed.filter(one => framesOf.has(one))) {
+        if (inside.size >= FRAMES_READ) break;
+        const held = (await raw(id, 'Accessibility.getFullAXTree', { frameId: framesOf.get(node) }).catch(() => null))?.nodes;
+        if (Array.isArray(held) && held.length) inside.set(node, { byId: new Map(held.map(one => [one.nodeId, one])), root: held.find(one => !one.parentId) || held[0], nodes: held });
+      }
+      // The ref an element is listed by: the number the browser gives it (counted from where this start of the
+      // extension begins), unless that number was given for another page (of this tab or another: their elements are
+      // numbered alike), then one that was given for none. One this page was given stays.
+      const current = session.refs.page === listed ? session.refs.ids : new Map(), refOf = new Map([...current].map(([one, node]) => [node, one])), nodeOf = new Map();
+      const numbered = node => {
+        const natural = refsFrom + node, given = issued.get(natural);
+        if (!refOf.has(node)) refOf.set(node, given && (given.tab !== id || given.page !== listed) ? ++unused : natural);
+        nodeOf.set(refOf.get(node), node);
+        return refOf.get(node);
+      };
       // The lines of a node and of what it holds.
-      const walk = (node, depth, above) => {
-        const role = node.role?.value || '', name = cut(node.name?.value || '', 160), value = node.value?.value, said = value !== undefined && value !== '', frame = frames.has(node.nodeId);
+      // ids: the tree the node is of (the page's own, or that of a frame).
+      const walk = (node, depth, above, ids = byId) => {
+        const role = node.role?.value || '', name = cut(node.name?.value || '', 160), value = node.value?.value, said = value !== undefined && value !== '', held = inside.get(node);
+        // A frame of the page, or one inside a frame (shown with nothing it holds).
+        const frame = frames.has(node) || (ids !== byId && !node.ignored && FRAMES.has(role));
         // A text that only repeats the name of what holds it says nothing new.
         const shown = !node.ignored && !SILENT.has(role) && !(role === 'StaticText' && (!name || above.includes(name))) && (interactiveOnly !== true || INTERACTIVE.has(role) || frame);
-        const below = (node.childIds || []).flatMap(child => { const next = byId.get(child); return next ? walk(next, shown && interactiveOnly !== true ? depth + 1 : depth, shown && name ? name : above) : []; });
+        const deeper = shown && interactiveOnly !== true ? depth + 1 : depth, below = held ? walk(held.root, frame && shown ? depth + 1 : depth, '', held.byId)
+          : (node.childIds || []).flatMap(child => { const next = ids.get(child); return next ? walk(next, deeper, shown && name ? name : above, ids) : []; });
         // Something that only holds other things, and holds nothing that is shown, is left out.
         if (!shown || (!name && !said && !INTERACTIVE.has(role) && !frame && !below.length)) return below;
         const properties = node.properties || [], states = properties.filter(item => STATES.includes(item.name) && item.value?.value && item.value.value !== 'false').map(item => item.name + (item.value.value === true || item.value.value === 'true' ? '' : '=' + item.value.value));
-        const address = role === 'link' ? properties.find(item => item.name === 'url')?.value?.value : frames.get(node.nodeId) || undefined;
-        return ['  '.repeat(Math.min(depth, 12)) + (node.backendDOMNodeId && role !== 'StaticText' ? '[' + node.backendDOMNodeId + '] ' : '') + (role === 'StaticText' ? 'text' : frame ? 'frame' : role) + (name ? ' "' + name + '"' : '') +
-          (said ? ' value="' + cut(value, 120) + '"' : '') + (address ? ' → ' + cut(address, 200) : '') + (states.length ? ' (' + states.join(', ') + ')' : '') + (frame ? ' (another page inside this one: what it holds is not listed here)' : ''), ...below];
+        const address = role === 'link' ? properties.find(item => item.name === 'url')?.value?.value : frames.get(node) || undefined;
+        return ['  '.repeat(Math.min(depth, 12)) + (node.backendDOMNodeId && role !== 'StaticText' ? '[' + numbered(node.backendDOMNodeId) + '] ' : '') + (role === 'StaticText' ? 'text' : frame ? 'frame' : role) + (name ? ' "' + name + '"' : '') +
+          (said ? ' value="' + cut(value, 120) + '"' : '') + (address ? ' → ' + cut(address, 200) : '') + (states.length ? ' (' + states.join(', ') + ')' : '') + (frame ? held ? ' (another page inside this one: what it holds is listed under it)' : ' (another page inside this one: what it holds is not listed here)' : ''), ...below];
       };
-      const root = nodes.find(node => !node.parentId) || nodes[0], all = root ? walk(root, 0, '') : [];
-      return { tabId: id, title: tab.title || '', url: tab.url || '', text: all.slice(0, most).join('\n'), nodes: Math.min(all.length, most), ...(all.length > most ? { truncated: true, leftOut: all.length - most } : {}), untrusted: true };
+      // The element asked for may be in a frame of the page as well.
+      const trees = [{ byId, nodes }, ...inside.values()], tree = part !== undefined ? trees.find(one => one.nodes.some(node => node.backendDOMNodeId === part)) : trees[0];
+      const root = part !== undefined ? tree?.nodes.find(node => node.backendDOMNodeId === part) : nodes.find(node => !node.parentId) || nodes[0];
+      // A page that went elsewhere while it was read has a node by that number that is another element, or none.
+      if (part !== undefined && session.page !== listed) throw fail('not_found', 'The page in this tab went elsewhere while it was read. Take a new page.snapshot.');
+      if (part !== undefined && !root) throw fail('not_found', 'This element is not in the tree a screen reader sees: it is hidden, only holds its parts in place, or is no longer on the page. page.inspect shows it; a snapshot of what is around it shows its parts.');
+      const all = root ? walk(root, 0, '', tree?.byId || byId) : [], kept = wanted === undefined ? all : all.filter(one => one.toLowerCase().includes(wanted.toLowerCase())), given = kept.slice(0, most);
+      // The refs it gives are taken from now on, on this tab and for this page (see element). A page that went away
+      // while it was read gives none.
+      if (session.page === listed) {
+        if (session.refs.page !== listed) session.refs = { page: listed, ids: new Map(), before: session.refs.ids };
+        for (const one of given) {
+          const number = Number(/^ *\[(\d+)\]/.exec(one)?.[1]);
+          if (!nodeOf.has(number)) continue;
+          session.refs.ids.delete(number); session.refs.ids.set(number, nodeOf.get(number));
+          issued.delete(number); issued.set(number, { tab: id, page: listed });
+        }
+        for (const old of session.refs.ids.keys()) { if (session.refs.ids.size <= REFS_KEPT) break; session.refs.ids.delete(old); }
+        for (const old of issued.keys()) { if (issued.size <= ISSUED_KEPT) break; issued.delete(old); }
+      }
+      return { tabId: id, title: tab.title || '', url: tab.url || '', text: given.join('\n'), nodes: given.length, ...(wanted !== undefined ? { query: wanted, matched: kept.length } : {}),
+        ...(kept.length > most ? { truncated: true, leftOut: kept.length - most } : {}), untrusted: true };
     },
     'page.inspect': async ({ tabId, ref, selector, text: shown, styles, maxChars } = {}) => {
       if (styles !== undefined && (!Array.isArray(styles) || !styles.length || styles.length > 60 || styles.some(name => typeof name !== 'string' || !/^[a-z-]{1,60}$/i.test(name)))) throw fail('invalid_input', 'styles is a list of 1 to 60 CSS property names.');
@@ -659,7 +768,9 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
         if (halted()) return;
         if (objectId) await raw(id, 'DOM.focus', { objectId }).catch(() => { throw fail('invalid_input', 'This element cannot take the keyboard: it is not something to type into.'); });
         if (halted()) return;
-        into = (await run(id, inPage(keyboard, clear === true))).value;
+        // A named element is asked in its own document, where the keyboard is with it: in a frame's, for one in a frame
+        // (the page itself only knows that the frame has it).
+        into = objectId ? await onElement(id, objectId, keyboard, clear === true) : (await run(id, inPage(keyboard, clear === true))).value;
         if (!into) throw fail('invalid_input', 'Nothing on the page has the keyboard. Say where to type: ref or selector.');
         // Emptied the way a person empties a field: everything selected, then deleted.
         if (clear === true && !halted()) { did(); await press(id, 'Delete'); }
@@ -690,6 +801,27 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
       if (chosen?.problem) throw fail('not_found', 'The list has no such choice. It offers: ' + (chosen.choices || []).join(' | '));
       return { tabId: id, selected: chosen, untrusted: true };
     },
+    // Files put into a file field, as the owner choosing them would: the page is told as it is told of a choice. The
+    // runtime names them by full paths, after it held them to the rules for reading them; nothing here reads them.
+    'page.upload': async ({ tabId, ref, selector, text: shown, files } = {}) => {
+      if (!Array.isArray(files) || !files.length || files.length > 20 || files.some(file => typeof file !== 'string' || !file || file.length > 4096)) throw fail('invalid_input', 'files is a list of 1 to 20 paths.');
+      const { id, session } = await page(tabId);
+      // Under the watch for a dialog as a click is: nothing is put in once one has opened, and once the files were
+      // handed over, a dialog the page answers them with is said with them.
+      return acting(session, async (halted, did) => {
+        const objectId = await element(id, { ref, selector, text: shown });
+        if (halted()) return;
+        const kind = await onElement(id, objectId, fileField);
+        if (halted()) return;
+        if (!kind) throw fail('invalid_input', 'This element is not a file field (<input type="file">). A button that opens one is clicked by the page to show the field: page.snapshot or page.inspect finds the field itself.');
+        if (kind === 'one' && files.length > 1) throw fail('invalid_input', 'This file field takes one file, and ' + files.length + ' were given.');
+        did();
+        await raw(id, 'DOM.setFileInputFiles', { objectId, files }).catch(error => {
+          throw /not allowed|file access|permission/i.test(said(error)) ? fail('forbidden', 'The browser does not let the DevMate extension hand files to a page. The owner switches on "Allow access to file URLs" for it, in the browser\'s extensions page (DevMate, Details).')
+            : fail('browser_error', 'DOM.setFileInputFiles failed: ' + said(error));
+        });
+      }, () => ({ tabId: id, uploaded: files.map(file => file.split(/[\\/]/).pop()) }));
+    },
     'page.scroll': async ({ tabId, ref, selector, deltaY } = {}) => {
       const { id, session } = await page(tabId);
       if (ref !== undefined || selector !== undefined) return acting(session, async (halted, did) => {
@@ -706,6 +838,23 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
         did();
         await command(id, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: Math.round((view.clientWidth || 800) / 2), y: Math.round((view.clientHeight || 600) / 2), deltaX: 0, deltaY: by });
       }, () => ({ tabId: id, scrolledBy: by }));
+    },
+    // The tools a page itself offers an agent (WebMCP). They are the page's own: what they say about themselves is its
+    // words, data and never instructions, and running one does whatever the page made it do, as page.evaluate would.
+    'page.tools': async ({ tabId } = {}) => {
+      const { id } = await page(tabId), tools = (await run(id, inPage(offered), { awaitPromise: true })).value;
+      return { tabId: id, tools: tools || [], ...(tools ? {} : { note: 'This browser gives the page no WebMCP, so it offers no tools here (Chrome has it on sites that took part in its trial).' }), untrusted: true };
+    },
+    'page.callTool': async ({ tabId, name, input } = {}) => {
+      const tool = text(name, 'name', { max: 200 });
+      if (input !== undefined && (input === null || typeof input !== 'object' || Array.isArray(input))) throw fail('invalid_input', 'input is an object: what the tool takes, as its inputSchema in page.tools says.');
+      const { id, session } = await page(tabId), answer = await unlessDialog(session, () => run(id, inPage(calling, tool, input ?? {}), { awaitPromise: true, gesture: true }));
+      if (answer === DIALOG) return withDialog(session, { tabId: id, tool });
+      const { problem, result } = answer.value || {};
+      if (problem === 'none') throw fail('not_supported', 'This browser gives the page no WebMCP, so it offers no tools here.');
+      if (problem === 'unknown') throw fail('not_found', 'The page offers no tool named ' + tool + '. page.tools lists those it offers.');
+      const shown = typeof result === 'string' ? result : JSON.stringify(result);
+      return { tabId: id, tool, ...(shown.length > 20000 ? { text: shown.slice(0, 20000), truncated: true, totalChars: shown.length } : { result }), untrusted: true };
     },
     'page.evaluate': async ({ tabId, expression, awaitPromise } = {}) => {
       const source = text(expression, 'expression', { max: 100000 }), { id, session } = await page(tabId), result = await unlessDialog(session, () => run(id, source, { awaitPromise: awaitPromise !== false, gesture: true }));
@@ -744,8 +893,8 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     }
   };
 
-  /** A picture of a tab through the debugger: the whole page, or a tab that is not in front. */
-  async function capture(tabId, { fullPage = false } = {}) {
+  /** A picture of a tab through the debugger: the whole page, one element of it (part), or a tab that is not in front. */
+  async function capture(tabId, { fullPage = false, part } = {}) {
     const { id, tab, session } = await page(tabId);
     // The browser draws only what it shows, so a tab that is put away is first told that it is looked at (see awake).
     // A picture is a read, so it is lent only: for as long as pictures of the tab are being taken, and no longer,
@@ -776,6 +925,25 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
         lent = away;
         if (lent && session.lent++ === 0) await wake(id);
         const again = lent || session.put || tab.active === false;
+        // One element, where it is drawn (all of its boxes), at most as large as a whole page is. A picture is a read, so
+        // nothing is scrolled: one in view is pictured as it is seen (also one that is fixed or sticky), one that is not
+        // has the page drawn beyond what is in view, which moves what is fixed. The browser takes the place as a place in
+        // the document, where the boxes are told in what the window shows: where the page is scrolled to is added, as for
+        // what is at a point (see atPoint).
+        if (part) {
+          const objectId = await element(id, part);
+          if (halted()) return null;
+          const quads = ((await raw(id, 'DOM.getContentQuads', { objectId }).catch(() => null))?.quads || []).filter(one => one.length === 8);
+          const xs = quads.flatMap(one => [one[0], one[2], one[4], one[6]]), ys = quads.flatMap(one => [one[1], one[3], one[5], one[7]]);
+          const metrics = await command(id, 'Page.getLayoutMetrics'), shown = metrics.cssVisualViewport || metrics.cssLayoutViewport || {};
+          const x = Math.max(0, Math.floor(Math.min(...xs) + (shown.pageX || 0))), y = Math.max(0, Math.floor(Math.min(...ys) + (shown.pageY || 0)));
+          const wide = Math.ceil(Math.max(...xs) + (shown.pageX || 0)) - x, tall = Math.ceil(Math.max(...ys) + (shown.pageY || 0)) - y;
+          if (!quads.length || !(wide >= 1) || !(tall >= 1)) throw fail('not_found', 'The element is not shown on the page, so there is nothing of it to picture. page.inspect says how it is laid out.');
+          const width = Math.min(wide, 4096), height = Math.min(tall, 8000);
+          const inView = Math.min(...xs) >= 0 && Math.min(...ys) >= 0 && Math.max(...xs) <= (shown.clientWidth ?? Infinity) && Math.max(...ys) <= (shown.clientHeight ?? Infinity) && wide === width && tall === height;
+          const shot = await pictured({ format: 'png', clip: { x, y, width, height, scale: 1 }, captureBeyondViewport: !inView }, halted, again);
+          return { tabId: id, mimeType: 'image/png', base64: shot.data, element: { x, y, width, height }, ...(wide > width || tall > height ? { truncated: true, elementWidth: wide, elementHeight: tall } : {}) };
+        }
         if (!fullPage) return { tabId: id, mimeType: 'image/png', base64: (await pictured({ format: 'png' }, halted, again)).data };
         // A long page is cut at a height a model can still read, and sent as JPEG so that it stays small.
         const size = (await command(id, 'Page.getLayoutMetrics')).cssContentSize || {}, width = Math.min(Math.ceil(size.width || 1280), 4096), tall = Math.ceil(size.height || 800), height = Math.min(tall, 8000);
@@ -790,5 +958,6 @@ export function createDebugger(chrome, { target, clock = () => Date.now(), sched
     }
   }
 
-  return { methods, capture, release, debugging: () => [...sessions.keys()] };
+  // opened: how often the debugger was put on a tab, so that a run can tell it was taken off and put on again.
+  return { methods, capture, release, debugging: () => [...sessions.keys()], opened: tabId => opened.get(tabId) || 0 };
 }

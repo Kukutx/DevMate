@@ -8,6 +8,11 @@ import { DEBUG_READ_ONLY, createDebugger } from './debug.js';
 
 export const READ_ONLY = Object.freeze(['browser.info', 'bookmarks.tree', 'bookmarks.search', 'tabs.list', 'windows.list', 'tabGroups.list',
   'history.search', 'downloads.list', 'sessions.recentlyClosed', 'readingList.list', 'topSites.list', 'page.read', 'page.screenshot', ...DEBUG_READ_ONLY]);
+// What a step of page.run may be: the methods of one tab's page, without its picture, its stored values or the debugger itself.
+// A run has RUN_MS for all its steps, as long as the runtime waits for it.
+const RUN_MS = 5 * 60 * 1000;
+export const RUN_STEPS = Object.freeze(['tabs.navigate', 'tabs.back', 'tabs.forward', 'page.read', 'page.snapshot', 'page.inspect', 'page.waitFor', 'page.console', 'page.network',
+  'page.click', 'page.hover', 'page.type', 'page.press', 'page.select', 'page.scroll', 'page.evaluate', 'page.dialog', 'page.reload', 'page.tools', 'page.callTool']);
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const text = (value, name, { optional = false, max = 4096 } = {}) => {
@@ -47,7 +52,9 @@ const download = item => ({ id: item.id, url: item.finalUrl || item.url, file: i
  * The methods, bound to a chrome object (the real one in the extension, a stand-in in tests). What else is given
  * (onChange, the clock and the timers) goes to the debugger: see createDebugger.
  */
-export function createCapabilities(chrome, { version = '', ownPort = () => undefined, ...debugging } = {}) {
+// paused: whether the owner has paused DevMate's use of the browser (the bridge refuses a call then; a run asks before
+// each of its steps).
+export function createCapabilities(chrome, { version = '', ownPort = () => undefined, paused = async () => false, ...debugging } = {}) {
   const available = (api, name) => { if (!api) throw fail('not_supported', 'This browser has no ' + name + ' for extensions.'); return api; };
   // DevMate's own workbench is not read, worked or sent elsewhere through the browser. What is decided there (what an
   // agent asks for, whether a task is handed to a coding agent, the access profile) is the owner's to decide at the
@@ -61,6 +68,7 @@ export function createCapabilities(chrome, { version = '', ownPort = () => undef
       try {
         const at = new URL(address);
         if (at.protocol === 'chrome-extension:' && at.host === chrome.runtime?.id) return 'This tab is a page of the DevMate extension itself. It is not read or worked through the browser.';
+        if (at.protocol === 'file:') return 'This tab shows a file of this computer (file://). Files are read by the rules of the project they are in (workspace_read), not through the browser, where those rules would not hold.';
         if (/^(127\.0\.0\.1|localhost|\[::1\])$/.test(at.hostname) && (Number(at.port) === ownPort() || tab.title === 'DevMate Workbench'))
           return 'This tab is DevMate\'s own workbench, where the owner decides at the computer. It is not read, worked or sent elsewhere through the browser.';
       } catch { /* not an address: nothing of DevMate's */ }
@@ -191,25 +199,68 @@ export function createCapabilities(chrome, { version = '', ownPort = () => undef
       const read = frame?.result || { title: page.title || '', url: page.url || '', text: '' };
       return { tabId: page.id, title: read.title, url: read.url, text: read.text.slice(0, most), ...(read.text.length > most ? { truncated: true, totalChars: read.text.length } : {}), untrusted: true };
     },
-    'page.screenshot': async ({ tabId, fullPage } = {}) => {
-      const page = await target(tabId);
-      // The tab in front is captured as it is seen. The whole page, a tab behind another, and a tab in front of a
-      // window that is itself put away (the page says so; one that cannot be asked is taken as shown) take the debugger.
-      // A page that does not answer within a moment (it is still loading, busy, or showing a dialog) is not waited for:
-      // it is captured as it is seen, as every tab in front was before.
-      const later = debugging.pause || (ms => new Promise(resolve => setTimeout(resolve, ms)));
-      const shown = () => {
-        const asked = chrome.scripting?.executeScript({ target: { tabId: page.id }, injectImmediately: true, func: () => document.visibilityState }).then(([frame]) => frame?.result !== 'hidden', () => true);
-        return asked === undefined || Promise.race([asked, later(400).then(() => true)]);
-      };
-      const seen = fullPage !== true && page.active && await shown();
-      if (!seen) return debug.capture(page.id, { fullPage: fullPage === true });
-      // Under a dialog the browser was seen to give the picture at once, and also not at all: it is not waited for to the end.
-      const image = await Promise.race([chrome.tabs.captureVisibleTab(page.windowId, { format: 'png' }).catch(error => { throw fail('browser_error', 'The browser did not capture this tab (' + String(error?.message || error).slice(0, 200) + ').'); }),
-        later(8000).then(() => { throw fail('browser_error', 'The browser gave no picture of this tab in eight seconds. A page that is showing a dialog may be why: answer it with page.dialog, or, where the tab does not answer that either, close the dialog in the browser or load the page again (tabs.reload).'); })]);
-      return { tabId: page.id, mimeType: 'image/png', base64: image.slice(image.indexOf(',') + 1) };
+    'page.screenshot': async ({ tabId, fullPage, ref, selector, text: words } = {}) => {
+      // One element (by ref, selector or the text it shows) is pictured through the debugger, wherever the tab is.
+      const part = ref !== undefined || selector !== undefined || words !== undefined ? { ref, selector, text: words } : null;
+      if (part && fullPage === true) throw fail('invalid_input', 'A picture is of the whole page (fullPage) or of one element (ref, selector or text), not both.');
+      // The window is pictured, not the tab: one that came to the front meanwhile (another call brought it there, and
+      // perhaps this one back again) is not handed over under this tab's name, nor at all where it is one that is not
+      // read through the browser. Every tab brought to the front is heard from before the tab is looked up until the
+      // picture is in hand, this one's as well: it coming to the front means that it was not there a moment before.
+      const turns = [], turned = change => { turns.push(change); };
+      chrome.tabs.onActivated?.addListener?.(turned);
+      try {
+        const page = await target(tabId);
+        if (part) return debug.capture(page.id, { part });
+        // The tab in front is captured as it is seen. The whole page, a tab behind another, and a tab in front of a
+        // window that is itself put away (the page says so; one that cannot be asked is taken as shown) take the debugger.
+        // A page that does not answer within a moment (it is still loading, busy, or showing a dialog) is not waited for:
+        // it is captured as it is seen, as every tab in front was before.
+        const later = debugging.pause || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+        const shown = () => {
+          const asked = chrome.scripting?.executeScript({ target: { tabId: page.id }, injectImmediately: true, func: () => document.visibilityState }).then(([frame]) => frame?.result !== 'hidden', () => true);
+          return asked === undefined || Promise.race([asked, later(400).then(() => true)]);
+        };
+        const seen = fullPage !== true && page.active && await shown();
+        if (!seen) return debug.capture(page.id, { fullPage: fullPage === true });
+        // Under a dialog the browser was seen to give the picture at once, and also not at all: it is not waited for to the end.
+        const image = await Promise.race([chrome.tabs.captureVisibleTab(page.windowId, { format: 'png' }).catch(error => { throw fail('browser_error', 'The browser did not capture this tab (' + String(error?.message || error).slice(0, 200) + ').'); }),
+          later(8000).then(() => { throw fail('browser_error', 'The browser gave no picture of this tab in eight seconds. A page that is showing a dialog may be why: answer it with page.dialog, or, where the tab does not answer that either, close the dialog in the browser or load the page again (tabs.reload).'); })]);
+        // Asked while still listening, so that a change the browser tells only after the picture is heard as well.
+        const front = (await chrome.tabs.query({ active: true, windowId: page.windowId }))[0];
+        if (turns.some(change => change?.windowId === page.windowId) || front?.id !== page.id || own(front)) throw fail('browser_error', 'Another tab came to the front of this window while it was pictured, so the picture was not handed over. Ask again.');
+        return { tabId: page.id, mimeType: 'image/png', base64: image.slice(image.indexOf(',') + 1) };
+      } finally { chrome.tabs.onActivated?.removeListener?.(turned); }
     },
     ...debug.methods
+  };
+  // Several methods of a page one after another on one tab, as one call: what a model would otherwise ask for one at
+  // a time, waiting for each answer. Each step is that method itself, checked as when it is called alone. The run
+  // stops at the first step that fails, and says which one, and how many were not done. It stops as well before a step
+  // once the owner has paused DevMate's use of the browser, once the debugger was taken off the tab while it ran (the
+  // owner took it off, or the tab went), and once its time is up: the runtime waits for a run no longer than that.
+  methods['page.run'] = async ({ tabId, steps, withinMs } = {}) => {
+    const within = Number.isInteger(withinMs) && withinMs > 0 ? Math.min(withinMs, RUN_MS) : RUN_MS;
+    if (!Array.isArray(steps) || !steps.length || steps.length > 30) throw fail('invalid_input', 'steps is a list of 1 to 30 steps, each { method, input }.');
+    for (const [at, step] of steps.entries()) {
+      if (!step || typeof step !== 'object' || Array.isArray(step) || !RUN_STEPS.includes(step.method)) throw fail('invalid_input', 'Step ' + (at + 1) + ': method is one of ' + RUN_STEPS.join(', ') + '.');
+      if (step.input !== undefined && (step.input === null || typeof step.input !== 'object' || Array.isArray(step.input))) throw fail('invalid_input', 'Step ' + (at + 1) + ': input is an object.');
+      if (step.input?.tabId !== undefined && step.input.tabId !== null) throw fail('invalid_input', 'Step ' + (at + 1) + ': a run works on one tab. Give its tabId once, for the run.');
+    }
+    const page = await target(tabId), done = [], began = (debugging.clock || Date.now)();
+    // watched: the tab had the debugger on it at some time during the run, so that its going is the owner taking it off;
+    // also where it was put on and taken off again within one step.
+    const first = debug.opened(page.id);
+    let watched = debug.debugging().includes(page.id);
+    for (const [at, step] of steps.entries()) {
+      const stop = at > 0 && await paused() ? { code: 'paused', message: 'The owner paused DevMate\'s use of this browser while the run went on: this step and those after it were not done.' }
+        : watched && !debug.debugging().includes(page.id) ? { code: 'browser_error', message: 'The debugger was taken off this tab while the run went on (the owner took it off, the tab was closed, or it went to a page the debugger does not go to). This step and those after it were not done.' }
+        : (debugging.clock || Date.now)() - began > within ? { code: 'timeout', message: 'The run took longer than DevMate waits for it (' + Math.round(within / 1000) + ' seconds): this step and those after it were not done.' } : null;
+      done.push({ method: step.method, ...(stop ? { ok: false, error: stop } : await answer(methods, step.method, { ...step.input, tabId: page.id })) });
+      watched ||= debug.debugging().includes(page.id) || debug.opened(page.id) !== first;
+      if (!done.at(-1).ok) return { tabId: page.id, steps: done, failed: at + 1, notDone: steps.length - at - 1, untrusted: true };
+    }
+    return { tabId: page.id, steps: done, untrusted: true };
   };
   return methods;
 }

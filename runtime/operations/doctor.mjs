@@ -1,6 +1,8 @@
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createChromeRegistration } from '../platform/chrome-registration.mjs';
+import { createClientRegistration } from '../platform/client-registration.mjs';
+import { SWITCH_OFF } from '../desktop.mjs';
 import { findOnPath, installHint, resolveTool, startable } from '../platform/tools.mjs';
 import { VERSION } from '../version.mjs';
 import { TUNNEL_HELP } from '../openai-tunnel.mjs';
@@ -125,13 +127,15 @@ export async function doctor(service) {
       check('connection.public', verification.verified ? 'ok' : verification.reachable || verification.pending ? 'warn' : 'fail',
         shown + (verification.verified ? ' reaches this runtime' : ' — ' + verification.reason + (verification.reachable || verification.pending ? '' : ' (asked from this computer; a client in the cloud may still get through: try it there)')),
         verification.verified ? null : connection.kind === 'cloudflare' ? 'In the Cloudflare dashboard, route the hostname to ' + (status.routeService || 'the ingress port') + '.'
-          : connection.kind === 'cloudflare-quick' ? 'A quick tunnel comes and goes: devmate restart gets a new one, and its address is then a new one (devmate mcp-url).'
+          : connection.kind === 'cloudflare-quick' ? 'A quick tunnel comes and goes. For a new one, and with it a new address (devmate mcp-url): devmate connect quick --new-address, then devmate restart.'
           : connection.relay ? 'devmate restart opens the forward to the relay again.' + lastSaid
           : connection.kind === 'ssh' ? 'The web server on ' + connection.host + ' has to send this address on to 127.0.0.1:' + (connection.remotePort ?? 18443) + ' there and ' + passOn + '.' + lastSaid
           : 'Your proxy has to send this address on to the ingress port of this computer (ingressPort in devmate status) and ' + passOn + '.');
     } else if (connection.kind === 'cloudflare-quick') check('connection.public', 'warn', 'The quick tunnel has not been given an address yet.', 'Give it a few seconds and run the doctor again: what cloudflared said last is in the connection.process line above.');
     else tunnelProof('connection.public', status, connection.tunnelId);
-    if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel, which Cloudflare offers for trying things out: no uptime guarantee, at most 200 requests at once, no event streams (DevMate answers through it in plain JSON, without progress messages). Its address changes whenever DevMate or the tunnel starts again, and the client has to be given the new one (devmate mcp-url).',
+    if (connection.kind === 'cloudflare-quick') check('connection.address', 'info', 'This is a quick tunnel, which Cloudflare offers for trying things out: no uptime guarantee, at most 200 requests at once, no event streams (DevMate answers through it in plain JSON, without progress messages). ' +
+      (status.addressSince ? 'Its address has stayed the same since ' + status.addressSince + (status.adopted ? ', kept from before the last restart of DevMate' : '') + '. ' : '') +
+      'The address stays across restarts and updates of DevMate. It changes after devmate stop, a runtime that ended on an error, a restart of the computer or a sign-out that ends your programs, a long time without a connection to Cloudflare, or devmate connect quick --new-address followed by devmate restart; the client then has to be given the new one (devmate mcp-url).',
       'For daily use take an address that stays: an OpenAI tunnel or a Cloudflare tunnel on a domain of yours ("Configure Connection" in the editor, or devmate connect).');
   }
   // OpenAI's tunnel beside that connection: a second way in, with a key and a state of its own.
@@ -147,10 +151,10 @@ export async function doctor(service) {
   }
   // What the runtime's own tunnel client hands over is served as the owner without sign-in, in either auth mode.
   const tunnelled = [status, tunnel].find(state => state?.kind === 'openai-tunnel' && state.client === 'built-in');
-  // A quick tunnel cannot ask for sign-in. Its address ends in a key that is new with every start, and that key is what
-  // keeps strangers out: the host name alone, which anyone watching DNS can see, opens nothing.
-  if (url && connection.kind === 'cloudflare-quick') check('security', 'warn', 'The quick tunnel has no sign-in: its address ends in a random key, new with every start, and whoever has the whole address can read and change your projects and run commands.',
-    'Give the address (devmate mcp-url) only to your own client, and do not paste it anywhere else. For sign-in use a tunnel whose address stays: an OpenAI tunnel, or a Cloudflare tunnel on a domain of yours.');
+  // A quick tunnel cannot ask for sign-in. Its address ends in a key, and that key is what keeps strangers out: the
+  // host name alone, which anyone watching DNS can see, opens nothing. The key stays until the owner makes a new one.
+  if (url && connection.kind === 'cloudflare-quick') check('security', 'warn', 'The quick tunnel has no sign-in: its address ends in a random key that stays until you make a new one, and whoever has the whole address can read and change your projects and run commands.',
+    'Give the address (devmate mcp-url) only to your own client, and do not paste it anywhere else. If it got out: devmate connect quick --new-address, then devmate restart. For sign-in use a tunnel whose address stays: an OpenAI tunnel, or a Cloudflare tunnel on a domain of yours.');
   // A relay forwards one path and no sign-in pages. It is kept private by the key and by the addresses it answers.
   else if (url && new URL(url).pathname !== '/mcp') check('security', 'warn', 'The relay has no sign-in and cannot have one: it forwards only the path its address ends in. That path ends in a key, and unless the relay was set up with --any-address it answers only the addresses ChatGPT and Claude connect from and this computer. Whoever has the whole address and comes from such an address can read and change your projects and run commands.',
     'Give the address (devmate mcp-url) only to your own client, and do not paste it anywhere else.');
@@ -165,10 +169,10 @@ export async function doctor(service) {
   const client = service.lastClient;
   // (What it calls itself is its own to choose: given as a name, in quotes it cannot close, and cut short.)
   if (client) check('client', 'info', 'The last MCP client called itself ' + (client.name ? named(client.name) : 'nothing') + (client.userAgent ? ' (sender line ' + named(client.userAgent, 120) + ')' : '') + ' and was shown the tool names of ' +
-    { gpt: 'ChatGPT and Codex', claude: 'Claude', generic: 'DevMate itself' }[client.surface] + ', ' +
+    { gpt: 'ChatGPT and Codex', claude: 'Claude', generic: 'DevMate itself', agent: 'a coding agent on this computer (what DevMate adds to its own tools)' }[client.surface] + ', ' +
     { address: 'as the address it used says (?tools=' + client.surface + ')', name: 'going by that name', tunnel: 'because it came through OpenAI\'s tunnel', default: 'because nothing about it was recognised' }[client.by] + ', at ' + client.at + '.',
   // The address is the owner's to add to; a tunnel id has no place for it.
-  client.by === 'address' || client.tunnel ? null : 'To give a client other tool names, add ?tools=gpt, ?tools=claude or ?tools=generic to the MCP address it uses. Every tool can be called under any of the names, whichever were shown.');
+  client.by === 'address' || client.tunnel ? null : 'To give a client other tool names, add ?tools=gpt, ?tools=claude, ?tools=agent or ?tools=generic to the MCP address it uses. Every tool can be called under any of the names, whichever were shown.');
   // The owner's browser: connected, registered and waiting for a browser to be opened, or not set up. A quick look:
   // the system is asked about the registration only where this instance has written one.
   const browser = service.browser.status();
@@ -182,9 +186,18 @@ export async function doctor(service) {
   else if (registration?.stale) check('chrome', 'warn', 'The browser was registered with a Node or a copy of DevMate that is no longer there, so the DevMate extension cannot reach this runtime.', 'Register it again: devmate chrome install');
   else if (registration?.registered) check('chrome', 'info', 'DevMate is registered with ' + registration.browsers.join(', ') + '; no browser with the DevMate extension is connected right now.', 'Open the browser. If the extension is not in it yet, devmate chrome says where to load it from.');
   else if (registration?.supported) check('chrome', 'info', 'The browser is not connected to DevMate: its bookmarks, tabs, history and downloads are not available to your client.', 'Connect it: devmate chrome install');
+  // The clients on this computer DevMate was added to (devmate client add): said where there is one, and where one
+  // was written for a Node that is gone or another instance.
+  try {
+    const { clients } = createClientRegistration({ instanceRoot: service.instanceRoot, cli: fileURLToPath(new URL('../cli.mjs', import.meta.url)) }).status();
+    const added = clients.filter(item => item.registered), stale = added.filter(item => item.stale), list = items => items.map(item => item.client).join(', ');
+    if (stale.length) check('clients', 'warn', 'DevMate was added to ' + list(stale) + ', but what starts it there is gone (the Node it was added with, or DevMate\'s bridge in the instance directory): it cannot start DevMate.','Add it again: ' + stale.map(item => 'devmate client add ' + item.client).join('; '));
+    else if (added.length) check('clients', 'ok', 'DevMate is one of the MCP servers of ' + list(added) + ' on this computer.');
+  } catch { /* a settings file that cannot be read is said by devmate client */ }
   // Full access is a choice, not a fault. Without sign-in on a public route it is everyone's who learns the address.
   if (service.fullAccess()) check('access', url && service.config.auth.mode === 'none' ? 'warn' : 'info',
-    'Full access: a client connected as the owner can share folders, read credential files and answer agents, and agent permission requests are granted automatically.' +
+    'Full access: a client connected as the owner can share folders, read credential files and answer agents' +
+      (service.desktop.reading() ? ', and read the windows on this screen (switched off alone with: ' + SWITCH_OFF + ')' : '') + ', and agent permission requests are granted automatically.' +
       (url && service.config.auth.mode === 'none' ? ' The public URL has no sign-in, so that is anyone who learns it.' : ''),
     'Back to the default with: devmate access guarded (or "Change Permission Profile" in the editor).');
   else check('access', 'ok', 'Guarded: sharing folders, credential files and agent approvals stay with you at this computer.');

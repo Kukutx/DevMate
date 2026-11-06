@@ -421,6 +421,27 @@ test('page.screenshot captures a tab in front of its window as it is seen, as a 
   await refuses(methods['page.screenshot']({ tabId: 404 }), 'not_found', /404/);
 });
 
+test('a picture of the tab in front is not handed over where another tab came to the front of its window while it was taken, and back again', async () => {
+  const heard = new Set(), turns = [];
+  const { methods, chrome } = withTabs({ 'tabs.captureVisibleTab': () => { for (const listener of heard) for (const turn of turns) listener(turn); return 'data:image/png;base64,AAAA'; } });
+  chrome.tabs.onActivated = { addListener: listener => heard.add(listener), removeListener: listener => heard.delete(listener) };
+  // Tab 2 to the front of window 7 and tab 1 back: the window looks as it did, and the picture may be of tab 2.
+  turns.push({ tabId: 2, windowId: 7 }, { tabId: 1, windowId: 7 });
+  await refuses(methods['page.screenshot'](), 'browser_error', /^Another tab came to the front of this window while it was pictured/);
+  assert.equal(heard.size, 0, 'and it is listened for no longer');
+  // This tab coming to the front of its window while it is pictured means it was not there a moment before.
+  turns.splice(0, 2, { tabId: 1, windowId: 7 });
+  await refuses(methods['page.screenshot'](), 'browser_error', /^Another tab came to the front/);
+  // It is listened for from before the tab is looked up: a tab brought forward and back while that is asked is heard.
+  turns.length = 0;
+  chrome.tabs.get = async id => { for (const listener of heard) { listener({ tabId: 2, windowId: 7 }); listener({ tabId: 1, windowId: 7 }); } return tabOf(id); };
+  await refuses(methods['page.screenshot']({ tabId: 1 }), 'browser_error', /^Another tab came to the front/);
+  // Another window's tabs change nothing of this picture.
+  turns.push({ tabId: 4, windowId: 8 });
+  assert.equal((await methods['page.screenshot']()).base64, 'AAAA');
+  assert.equal(heard.size, 0);
+});
+
 test('answer gives the result of a method, and an empty object as its input when none was sent', async () => {
   const seen = [];
   const methods = { 'echo.back': async params => { seen.push(params); return { got: params }; } };

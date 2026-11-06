@@ -1,6 +1,9 @@
+import fs from 'node:fs';
 import { z } from 'zod';
 import { DomainError } from '../store.mjs';
 import { BROWSER_ENGINE, isBrowserCapability } from '../chrome.mjs';
+import { DESKTOP_ENGINE, SWITCH_INPUT_ON, SWITCH_ON, isDesktopCapability } from '../desktop.mjs';
+import { resolveProjectPath } from '../workspace.mjs';
 import { hasWords, id, keywords, mutation, ownerCommand, projectScope } from './shared.mjs';
 
 // Domain capabilities: the built-in engines (browser control and QA, Godot, reverse
@@ -8,12 +11,28 @@ import { hasWords, id, keywords, mutation, ownerCommand, projectScope } from './
 // Who asks the browser, for which of the browsers' ids they hold: the owner at this computer, or a client by the way
 // it came and the name it gave (see the answered browsers in ../chrome.mjs).
 const browserCaller = context => context?.surface === 'local' ? 'local' : 'connected ' + (context?.via || '') + ' ' + String(context?.client || '');
+// What a page is given to upload is read from a project of the call, by the rules for reading it (workspace.read):
+// the page may send it anywhere, so nothing goes that the caller could not read. The browser is handed the full paths.
+const UPLOAD = BROWSER_ENGINE + '.page.upload';
+function uploads(service, args) {
+  if (args.capability !== UPLOAD) return undefined;
+  if (!args.projectId) throw new DomainError('invalid_input', UPLOAD + ' takes files of a project: give projectId, and the files by their paths in it.');
+  const project = service.project(args.projectId), named = Array.isArray(args.input?.files) ? args.input.files : [];
+  return named.map(file => {
+    if (typeof file !== 'string') return file;
+    const full = resolveProjectPath(project, file, { links: true });
+    if (!fs.statSync(full).isFile()) throw new DomainError('invalid_input', 'Only files go into a page, and ' + file + ' is a folder.');
+    return full;
+  });
+}
 
 export function defineCapabilityOperations(service, add) {
   const engine = z.string().max(80);
   // The owner's browser belongs to no project: its capabilities (chrome.*) are answered whichever projects are shared,
-  // and when none is.
+  // and when none is. So do the owner's windows (desktop.*).
   const ofBrowser = args => isBrowserCapability(args.capability), listsBrowser = args => args.engine === BROWSER_ENGINE || isBrowserCapability(args.name);
+  const ofDesktop = args => isDesktopCapability(args.capability), listsDesktop = args => args.engine === DESKTOP_ENGINE || isDesktopCapability(args.name);
+  const ofOwner = args => ofBrowser(args) || ofDesktop(args), listsOwner = args => listsBrowser(args) || listsDesktop(args);
   // With words to look for, an engine keeps the capabilities that have them, and an engine that has none is left out.
   const having = (query, listed) => query && Array.isArray(listed?.engines)
     ? { ...listed, engines: listed.engines.map(item => Array.isArray(item.capabilities) ? { ...item, capabilities: item.capabilities.filter(one => hasWords(query, one.name, one.description || '')) } : item).filter(item => !Array.isArray(item.capabilities) || item.capabilities.length) }
@@ -22,29 +41,41 @@ export function defineCapabilityOperations(service, add) {
     serverId: id.optional(), cursor: z.string().max(512).optional() }, true,
     'Discover the domain capabilities of this project: browser control and QA, Godot, reverse engineering, Obsidian, configured external MCP servers, and the owner\'s own browser (engine:"chrome": bookmarks, tabs, history, downloads, the page in front; no project needed). summary:true lists names and descriptions only; engine narrows to one domain; name returns one capability with its input schema.', async (args, context) => {
       if (listsBrowser(args)) return isBrowserCapability(args.name) ? service.browser.list({ name: args.name }) : having(args.query, { engines: [service.browser.list({ full: args.summary !== true })] });
+      if (listsDesktop(args)) return isDesktopCapability(args.name) ? service.desktop.list({ name: args.name }) : having(args.query, { engines: [service.desktop.list({ full: args.summary !== true })] });
       const listed = await service.capabilities.list(args, { signal: service.waitSignal(context) });
-      // The browser is listed beside the project's own engines, by name only: its capabilities are one call away.
+      // The browser and the windows are listed beside the project's own engines, by name only: their capabilities are one call away.
       return having(args.name === undefined ? args.query : undefined, Array.isArray(listed.engines) && args.engine === undefined && args.name === undefined && args.serverId === undefined
-        ? { ...listed, engines: [...listed.engines, service.browser.list({})] } : listed);
-    }, { withoutProject: listsBrowser });
+        ? { ...listed, engines: [...listed.engines, service.browser.list({}), service.desktop.list({})] } : listed);
+    }, { withoutProject: listsOwner });
   add('capability.call', { ...projectScope, capability: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()).default({}), ...mutation }, false,
     'Invoke one capability by the name capability_list gave it, with the input its schema describes (capability_list {name} returns that schema). The result is the capability\'s own. For a capability marked readOnly use capability_query.', (args, context) =>
-      ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), caller: browserCaller(context) })
+      ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), caller: browserCaller(context), files: uploads(service, args) })
+        : ofDesktop(args) ? service.desktop.call(args, { signal: service.waitSignal(context), who: browserCaller(context) })
         : service.capabilities.call(args, { signal: service.waitSignal(context), ownerDecides: service.ownerDecides(context) }),
-    { destructive: true, openWorld: true, withoutProject: ofBrowser });
+    { destructive: true, openWorld: true, withoutProject: ofOwner });
   // The same call for what only reads. A client that asks its user before every change has nothing to ask here.
   add('capability.query', { ...projectScope, capability: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()).default({}) }, true,
     'Invoke a read-only capability (readOnly:true in capability_list; also a dryRun capability with its dry run on): status, inspection, search, snapshots. It never changes anything; everything else goes through capability_call.', (args, context) =>
       ofBrowser(args) ? service.browser.call(args, { signal: service.waitSignal(context), readOnly: true, caller: browserCaller(context) })
+        : ofDesktop(args) ? service.desktop.call(args, { signal: service.waitSignal(context), readOnly: true, who: browserCaller(context) })
         : service.capabilities.call(args, { signal: service.waitSignal(context), readOnly: true }),
-    { openWorld: true, withoutProject: ofBrowser });
+    { openWorld: true, withoutProject: ofOwner });
   // Without a project these act on the whole runtime, so the project is optional and not filled in.
   add('capability.settings', { projectId: id.optional(), engine: engine.optional() }, true,
-    'Read the settings of the capability engines (browser control and QA, Godot, reverse engineering, Obsidian): whether each is switched on and how it is set up. With projectId the values that apply to that project.',
-    args => service.capabilities.settings(args));
+    'Read the settings of the capability engines (browser control and QA, Godot, reverse engineering, Obsidian, the windows of the computer): whether each is switched on and how it is set up. With projectId the values that apply to that project.',
+    args => args.engine === DESKTOP_ENGINE ? service.desktop.settings() : service.capabilities.settings(args));
   add('capability.configure', { projectId: id.optional(), engine: engine.min(1), settings: z.record(z.string(), z.unknown()), ...mutation }, false,
-    'Change settings of one capability engine for the whole runtime, or with projectId for one project. A null value restores the default; enabled:false switches the engine off. A connected client can only switch an engine off; everything else is set up by the owner on their own computer, or by a connected client when the owner chose the full access profile.',
+    'Change settings of one capability engine for the whole runtime, or with projectId for one project. A null value restores the default; enabled:false switches the engine off. A connected client can only switch an engine off; everything else is set up by the owner on their own computer, or by a connected client when the owner chose the full access profile, but for the windows of the computer (engine desktop), which only the owner widens.',
     (args, context) => {
+      // The owner's windows reach past what is shared: reading them, and the programs acted in, are the owner's to widen at
+      // this computer, in either profile. A connected client may only take away: reading switched off, programs taken out.
+      if (args.engine === DESKTOP_ENGINE) {
+        if (context.surface !== 'local' && !service.desktop.narrows(args.settings))
+          throw new DomainError('forbidden', 'Reading the owner\'s windows, and the programs DevMate may act in, are the owner\'s to widen on their own computer: ' + SWITCH_ON + ', and ' + SWITCH_INPUT_ON + '. A connected client can only switch reading off or take programs out.');
+        const changed = service.desktop.configure(args.settings);
+        service.store.event('capability.desktop.configured', null, { keys: Object.keys(args.settings), scope: 'instance' });
+        return changed;
+      }
       // An engine's settings name programs and folders on this computer. Like what is shared, they are the owner's to widen.
       if (!service.ownerDecides(context) && (Object.keys(args.settings).length !== 1 || args.settings.enabled !== false))
         throw new DomainError('forbidden', 'Capability engines are set up by the owner on their own computer (local workbench or the devmate command). A connected client can only switch one off.');

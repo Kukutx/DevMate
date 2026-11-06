@@ -36,7 +36,7 @@ export function summarize(...parts) {
 // What an agent process inherits from the runtime: enough to find its executable, the
 // user's profile and login, a proxy and the local toolchains. Everything else, API keys
 // and DevMate's own credentials included, reaches it only through the provider settings.
-const INHERITED = new Set([
+export const INHERITED = new Set([
   'PATH', 'PATHEXT', 'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'ALLUSERSPROFILE', 'PUBLIC',
   'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMW6432', 'COMMONPROGRAMFILES', 'COMMONPROGRAMFILES(X86)', 'COMMONPROGRAMW6432',
   'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'PSMODULEPATH', 'OS', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_IDENTIFIER', 'NUMBER_OF_PROCESSORS',
@@ -49,7 +49,7 @@ const INHERITED = new Set([
 ]);
 // home: where the vendor CLI keeps its configuration and login. keys: the account
 // variables it reads, passed on only when the provider sets inheritApiKeys.
-const PROVIDER_ENV = {
+export const PROVIDER_ENV = {
   codex: { home: ['CODEX_HOME', 'CODEX_SQLITE_HOME'],
     keys: ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_ORGANIZATION', 'OPENAI_PROJECT', 'AZURE_OPENAI_API_KEY'] },
   claude: { home: ['CLAUDE_CONFIG_DIR'],

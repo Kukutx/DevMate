@@ -77,11 +77,13 @@ export async function inspectTunnelClient({ executable, execFileImpl = executeFi
 export function createConnection({
   config = { kind: 'local' }, localMcpUrl, localHeaders, beside = false, instanceRoot, instanceId,
   env = process.env, spawnImpl = spawn, fetchImpl = globalThis.fetch,
-  terminateImpl = terminateProcessTree
+  terminateImpl = terminateProcessTree,
+  // (A test's own: how a quick tunnel's connector is written down, which port its metrics take, and its clock.)
+  ...quickTunnel
 } = {}) {
   const settings = normalizeConnectionConfig(config);
   if (settings.kind === 'ssh') return createSshConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl });
-  if (settings.kind === 'cloudflare' || settings.kind === 'cloudflare-quick') return createCloudflareConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl, fetchImpl });
+  if (settings.kind === 'cloudflare' || settings.kind === 'cloudflare-quick') return createCloudflareConnection({ config: settings, localMcpUrl, instanceRoot, env, spawnImpl, terminateImpl, fetchImpl, ...quickTunnel });
   if (settings.kind === 'openai-tunnel' && !settings.executable) {
     const tunnel = createOpenAiTunnel({ tunnelId: settings.tunnelId, runtimeKeyEnv: settings.runtimeKeyEnv, organizationId: settings.organizationId, maxConcurrentRequests: settings.maxConcurrentRequests,
       localMcpUrl: httpTarget(localMcpUrl), localHeaders, beside, instanceId, env, fetchImpl });

@@ -10,6 +10,13 @@ import { createMcpServer, serverInstructions } from '../runtime/mcp.mjs';
 import { clientSurfaceBy, surfaceFor } from '../runtime/surfaces.mjs';
 import { startRuntime } from '../runtime/main.mjs';
 
+// The runtimes started here look at the clients' settings (whether DevMate was added to them): those of whoever runs
+// the tests are not read. Where Claude Code, Codex and Claude Desktop keep them is a folder of these tests.
+// (On macOS Claude Desktop's settings are under the home folder itself, and so is the socket of a runtime, whose path may
+// be no longer than 104 bytes: the home is a short folder there.)
+const clientHome = fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/tmp' : os.tmpdir(), 'devmate-client-home-'));
+for (const name of ['APPDATA', 'LOCALAPPDATA', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', ...(process.platform === 'darwin' ? ['HOME'] : [])]) process.env[name] = clientHome;
+process.on('exit', () => fs.rmSync(clientHome, { recursive: true, force: true }));
 const owner = { id: 'owner', surface: 'local' }, connected = { id: 'owner' };
 // A script of the project run with this Node: PowerShell needs the call operator before a quoted program.
 const run = script => (process.platform === 'win32' ? '& ' : '') + '"' + process.execPath + '" ' + script;
@@ -37,8 +44,15 @@ const WORKBENCH = ['open_devmate_workbench', 'workbench_call'];
 const SHELL_TOOL = process.platform === 'win32' ? 'powershell' : 'bash', OTHER_SHELL_TOOL = process.platform === 'win32' ? 'bash' : 'powershell';
 
 test('a client gets the tools of the model it is: by its name, by how it reached the runtime, or as the owner chose', () => {
-  for (const [said, surface] of [[{ name: 'openai-mcp' }, 'gpt'], [{ name: 'ChatGPT' }, 'gpt'], [{ name: 'codex-mcp-client' }, 'gpt'], [{ userAgent: 'openai-mcp/1.0.0' }, 'gpt'],
-    [{ name: 'claude-ai' }, 'claude'], [{ name: 'claude-code', userAgent: 'claude-code/2.1.0' }, 'claude'], [{ userAgent: 'Claude-User' }, 'claude'], [{ name: 'Anthropic/Toolbox' }, 'claude'],
+  for (const [said, surface] of [[{ name: 'openai-mcp' }, 'gpt'], [{ name: 'ChatGPT' }, 'gpt'], [{ userAgent: 'openai-mcp/1.0.0' }, 'gpt'],
+    [{ name: 'claude-ai' }, 'claude'], [{ userAgent: 'Claude-User' }, 'claude'], [{ name: 'Anthropic/Toolbox' }, 'claude'],
+    // A coding agent on this computer, by the name it gives itself (or the one DevMate's bridge carries for it in its
+    // sender line), where it came the local way: it reads, writes and runs with tools of its own.
+    [{ name: 'claude-code', userAgent: 'claude-code/2.1.0', local: true }, 'agent'], [{ name: 'codex-mcp-client', local: true }, 'agent'], [{ name: ' Claude-Code ', local: true }, 'agent'],
+    [{ userAgent: 'devmate-mcp (claude-code)', local: true }, 'agent'], [{ userAgent: 'devmate-mcp (codex-mcp-client)', local: true }, 'agent'], [{ chosen: 'agent', name: 'my-script' }, 'agent'],
+    [{ userAgent: 'claude-code/2.1.0', local: true }, 'claude'], [{ name: 'codex-mcp-client-fork', local: true }, 'gpt'],
+    // The same agent on another computer, through the public address or a tunnel: DevMate's own tools are its way in.
+    [{ name: 'claude-code' }, 'claude'], [{ name: 'codex-mcp-client', tunnel: true }, 'gpt'], [{ userAgent: 'devmate-mcp (claude-code)' }, 'claude'],
     [{ name: 'Visual Studio Code' }, 'generic'], [{ name: 'cursor-vscode' }, 'generic'], [{}, 'generic'], [undefined, 'generic'], [{ name: 'my-script', userAgent: 'node' }, 'generic'],
     // OpenAI's tunnel carries ChatGPT whatever it calls itself; what the client says still comes first.
     [{ tunnel: true }, 'gpt'], [{ tunnel: true, name: 'claude-ai' }, 'claude'],
@@ -51,11 +65,12 @@ test('a client gets the tools of the model it is: by its name, by how it reached
 
 test('each surface lists its tools under the names its model knows: everything that reads and the capability tools are on every list', async t => {
   const f = await fixture(t), sizes = {};
-  for (const surface of ['generic', 'gpt', 'claude']) {
+  for (const surface of ['generic', 'gpt', 'claude', 'agent']) {
     const client = await f.open({ surface, listing: true }), listed = await client.listTools();
     sizes[surface] = Buffer.byteLength(JSON.stringify(listed));
     const shown = surfaceFor(surface, f.service.processes.shell);
-    assert.deepEqual(listed.tools.map(tool => tool.name).sort(), [...shown.direct.map(name => name.replace('.', '_')), ...shown.native, ...WORKBENCH].sort(), surface);
+    // (A coding agent shows no MCP Apps: it is not given the workbench.)
+    assert.deepEqual(listed.tools.map(tool => tool.name).sort(), [...shown.direct.map(name => name.replace('.', '_')), ...shown.native, ...(surface === 'agent' ? [] : WORKBENCH)].sort(), surface);
     // A tool's name does not promise another shell than the one that runs.
     if (surface === 'claude') { assert.ok(shown.native.includes(SHELL_TOOL) && !shown.native.includes(OTHER_SHELL_TOOL), shown.native.join()); assert.ok(listed.tools.find(tool => tool.name === SHELL_TOOL).description.includes(f.service.processes.shell.label)); }
     if (surface === 'gpt') assert.ok(listed.tools.find(tool => tool.name === 'exec_command').description.startsWith('The shell here is ' + f.service.processes.shell.label), 'the first thing exec_command says is which shell this is');
@@ -71,7 +86,7 @@ test('each surface lists its tools under the names its model knows: everything t
   for (const [surface, bytes] of Object.entries(sizes)) assert.ok(bytes < 40135, surface + ' lists ' + bytes + ' bytes');
   // A tool a model cannot see is a tool it does not use: every surface lists whatever only reads, the capability tools
   // (the owner's browser and the other engines are behind them) and taking a change back.
-  for (const surface of ['generic', 'gpt', 'claude']) {
+  for (const surface of ['generic', 'gpt', 'claude', 'agent']) {
     const listed = (await (await f.open({ surface, listing: true })).listTools()).tools, named = new Set(listed.map(tool => tool.name));
     for (const name of ['project_list', 'project_overview', 'editor_context', 'editor_diagnostics', 'workspace_files', 'workspace_find', 'workspace_search', 'workspace_history', 'workspace_restore', 'git_status', 'git_diff', 'git_log',
       'git_show', 'git_blame', 'git_branches', 'process_list', 'providers_list', 'connection_status', 'capability_list', 'capability_query', 'capability_call', 'operations_list', 'operations_query', 'operations_call'])
@@ -95,6 +110,76 @@ test('each surface lists its tools under the names its model knows: everything t
   assert.match(serverInstructions(f.service, 'gpt'), /capability_list lists engines: the owner's browser \(engine "chrome": bookmarks, tabs, history; chrome\.page\.\* debugs pages/);
 });
 
+test('a coding agent on this computer is shown what DevMate adds to its own tools: the owner\'s browser, other projects, history, running commands', async t => {
+  const f = await fixture(t), listed = await (await f.open({ surface: 'agent', listing: true })).listTools(), named = new Set(listed.tools.map(tool => tool.name));
+  // Nothing of DevMate's to read, write, change or run: the agent's own tools do that.
+  for (const name of ['read', 'write', 'edit', 'apply_patch', 'exec_command', 'write_stdin', 'bash', 'powershell', 'workspace_read', 'workspace_write', 'workspace_edit', 'workspace_patch', 'shell_run', 'show_changes', ...WORKBENCH])
+    assert.equal(named.has(name), false, name + ' is listed');
+  // The owner's browser in four tools of its own: three that only read, one that changes.
+  const browser = Object.fromEntries(listed.tools.filter(tool => tool.name.startsWith('browser_')).map(tool => [tool.name, tool.annotations.readOnlyHint]));
+  assert.deepEqual(browser, { browser_tabs: true, browser_snapshot: true, browser_screenshot: true, browser_run: false });
+  assert.ok(listed.tools.find(tool => tool.name === 'browser_run').inputSchema.properties.steps, 'browser_run takes the steps of chrome.page.run');
+  // On Windows the owner's windows in four more, the same way; elsewhere there are none to read, and they are not shown.
+  const desktop = Object.fromEntries(listed.tools.filter(tool => tool.name.startsWith('desktop_')).map(tool => [tool.name, tool.annotations.readOnlyHint]));
+  assert.deepEqual(desktop, process.platform === 'win32' ? { desktop_windows: true, desktop_snapshot: true, desktop_screenshot: true, desktop_act: false } : {});
+  assert.deepEqual(surfaceFor('agent', { kind: 'bash' }, 'linux').native.filter(name => name.startsWith('desktop_')), []);
+  assert.equal(surfaceFor('agent', { kind: 'pwsh' }, 'win32').native.filter(name => name.startsWith('desktop_')).length, 4);
+  // Underneath they are the capability calls, authorized as those: reading the windows is the owner's to switch on.
+  const refused = await (await f.open({ surface: 'agent' })).callTool({ name: 'desktop_windows', arguments: {} });
+  assert.equal(refused.isError, true); assert.match(refused.content[0].text, process.platform === 'win32' ? /"forbidden"/ : /"not_supported"/);
+  // Claude Code is told how large a result may be.
+  for (const tool of listed.tools) assert.equal(tool._meta?.['anthropic/maxResultSizeChars'], 140000, tool.name);
+  // The instructions say what is DevMate's own, all of it within the first 512 characters (some clients read no more),
+  // and name none of DevMate's tools to read, write or run, in either spelling.
+  const words = serverInstructions(f.service, 'agent'), first = words.slice(0, 512);
+  for (const name of ['with your own tools', 'browser_snapshot', 'project_list', 'editor_diagnostics', 'workspace_restore', 'process_stop', 'agents_delegate', 'projectId']) assert.ok(first.includes(name), name + ' is not within 512 characters');
+  assert.doesNotMatch(words, /workspace[._]read|shell[._]run|apply[._]patch/);
+  // The browser tools are the capability calls underneath, answered by the browser that is connected.
+  const client = await f.open({ surface: 'agent' }), linkId = f.service.browser.attach({ browser: 'Test browser', extension: '4.0.6', methods: ['tabs.list'] }).linkId;
+  await f.service.browser.next({ linkId, waitMs: 1000 });
+  const asked = client.callTool({ name: 'browser_tabs', arguments: {} }), handed = await f.service.browser.next({ linkId, waitMs: 5000 });
+  assert.deepEqual(handed.calls.map(call => call.method), ['tabs.list']);
+  f.service.browser.result({ linkId, id: handed.calls[0].id, ok: true, result: { items: [{ id: 7, windowId: 1, title: 'A tab of the test', url: 'https://example.com/' }] } });
+  const tabs = await asked;
+  assert.equal(tabs.isError, undefined, JSON.stringify(tabs.content)); assert.match(tabs.content[0].text, /A tab of the test/);
+  f.service.browser.detach({ linkId });
+});
+
+test('the instructions of every surface stay within 2000 characters, with full access and with no project, one, or many', async t => {
+  // With full access and no project the instructions were 2098 characters (2108 with Windows PowerShell 5.1), and with
+  // forty projects they were too long while naming none of them.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-instructions-'));
+  const service = new DevMateService({ instanceRoot: path.join(temp, 'instance'), endpoint: '' });
+  await service.ready;
+  t.after(async () => { await service.close(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const shells = [service.processes.shell, { kind: 'powershell', label: 'Windows PowerShell 5.1', noChaining: true }];
+  const look = what => {
+    for (const shell of shells) {
+      service.processes.shell = shell;
+      for (const surface of ['generic', 'gpt', 'claude', 'agent']) {
+        const words = serverInstructions(service, surface);
+        assert.ok(words.length <= 2000, what + ', ' + shell.label + ', ' + surface + ': ' + words.length + ' characters');
+        // The projects are fitted as they are written, what follows them counted ahead: the plain count, the last
+        // resort where the words would not fit after all, is not what is said.
+        assert.doesNotMatch(words, /projects are shared \(project_list\)/, what + ', ' + shell.label + ', ' + surface);
+        // With no project, how one is shared is said on every surface: the client's way where the owner gave it one.
+        if (/no project/.test(what)) assert.match(words, service.fullAccess() ? /project\.create/ : /devmate project add <folder>/, what + ', ' + shell.label + ', ' + surface);
+      }
+    }
+    service.processes.shell = shells[0];
+  };
+  for (const profile of ['guarded', 'full']) { await service.call('access.update', { profile }, owner); look(profile + ', no project'); }
+  for (let index = 0; index < 40; index++) { const root = path.join(temp, 'project-with-a-name-of-some-length-' + index); fs.mkdirSync(root); await service.call('project.create', { root }, owner); }
+  for (const profile of ['guarded', 'full']) { await service.call('access.update', { profile }, owner); look(profile + ', forty projects'); }
+  // Where there is room, projects are named before the rest is counted.
+  assert.match(serverInstructions(service, 'agent'), /Projects: \S+ = project-with-a-name-of-some-length-0 .* and \d+ more \(project_list\)\./);
+  // A project's name and folder are the owner's, given as they are, whatever tool names they hold.
+  for (const project of service.store.list('project', { limit: 50 })) await service.call('project.remove', { id: project.id }, owner);
+  await service.call('access.update', { profile: 'guarded' }, owner);
+  const named = path.join(temp, 'shell_run'); fs.mkdirSync(named); await service.call('project.create', { root: named }, owner);
+  for (const surface of ['gpt', 'claude']) assert.ok(serverInstructions(service, surface).includes('= shell_run (' + named + ', '), surface);
+});
+
 test('a request that calls finds every tool, whatever list its caller was shown', async t => {
   const f = await fixture(t), client = await f.open({ surface: 'gpt' });
   const all = await names(client);
@@ -104,6 +189,25 @@ test('a request that calls finds every tool, whatever list its caller was shown'
   assert.match(f.text(await client.callTool({ name: 'workspace_read', arguments: { path: 'a.txt' } })), /1\talpha/);
   assert.match(f.text(await client.callTool({ name: 'edit', arguments: { path: 'a.txt', edits: [{ old_text: 'alpha', new_text: 'beta' }] } })), /"replacements":1/);
   assert.equal((await client.callTool({ name: 'project_list', arguments: {} })).structuredContent.items.length, 1);
+});
+
+test('only what DevMate says is put into the names of a surface: a file, command output and instructions read are given as they are', { timeout: 60000 }, async t => {
+  const f = await fixture(t), client = await f.open({ surface: 'gpt' });
+  const call = async (name, args) => f.text(await client.callTool({ name, arguments: args }));
+  const words = 'Call workspace_read first, then shell_run; process_read follows it.';
+  fs.writeFileSync(path.join(f.root, 'AGENTS.md'), words + '\n');
+  assert.ok((await call('workspace_read', { path: 'AGENTS.md' })).includes('1\t' + words), 'the file as it is');
+  assert.ok((await call('project_overview', {})).includes(words), 'the project\'s instructions');
+  fs.writeFileSync(path.join(f.root, 'says.js'), "console.log(" + JSON.stringify(words) + ");setTimeout(()=>{},3000)");
+  const running = await call('shell_run', { command: run('says.js'), waitMs: 1500 });
+  assert.ok(running.includes(words), running);
+  // The hint after the output is DevMate's, and names the tool of this surface.
+  assert.match(running, /\[still running; write_stdin \{id:"/);
+  // A path an error says back is the caller's, whatever names of tools it happens to hold.
+  for (const missing of ['logs/git.log', 'src/shell.run.ts', 'docs/workspace_read.md']) {
+    const refused = await client.callTool({ name: 'workspace_read', arguments: { path: missing } });
+    assert.equal(refused.isError, true); assert.ok(refused.content[0].text.includes(missing), refused.content[0].text);
+  }
 });
 
 test('the tools a GPT model knows work as it expects: read, apply_patch, exec_command, write_stdin', { timeout: 60000 }, async t => {
@@ -234,7 +338,7 @@ test('over HTTP a client is shown the surface of its name or its address, and ma
   assert.deepEqual(last(), ['some-editor[31m' + 'x'.repeat(65), 'generic', 'default']);
   const unknown = (await runtime.service.call('runtime.doctor', {}, owner)).checks.find(item => item.id === 'client');
   assert.equal(unknown.status, 'info'); assert.match(unknown.detail, /^The last MCP client called itself "some-editor\[31mx+" \(sender line "[^"]*"\) and was shown the tool names of DevMate itself, because nothing about it was recognised, at 20\d\d-/);
-  assert.match(unknown.fix, /add \?tools=gpt, \?tools=claude or \?tools=generic to the MCP address it uses/);
+  assert.match(unknown.fix, /add \?tools=gpt, \?tools=claude, \?tools=agent or \?tools=generic to the MCP address it uses/);
   // The runtime's own check of its public route arrives as the owner where no sign-in is asked for. It is not a client:
   // what the doctor says of the last client stays what it was.
   await names(await connect('devmate-connection-verify'));

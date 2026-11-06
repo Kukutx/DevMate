@@ -148,7 +148,8 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
   }
   async function restartRuntime() {
     if (!(await confirmShared('Restart'))) return null;
-    await detachVault({ explicit: false }); await client.stop(); const result = await client.start(); await sync(); return result;
+    // (again: stopped to be started at once; a quick tunnel and its address stay.)
+    await detachVault({ explicit: false }); await client.stop({ again: true }); const result = await client.start(); await sync(); return result;
   }
   // The owner's word on this vault: read and write, read only, or not shared at all.
   async function changeSharing() {
@@ -175,8 +176,8 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
   async function accessProfile() {
     const current = (await client.call('access.read', {}, { scoped: false })).profile;
     const choice = await ask('What may your connected AI client decide?', current === 'full'
-      ? 'Full access is on: your client can share folders, read credential files, set up engines and answer agents, and what a delegated agent asks permission for is granted automatically.'
-      : 'Guarded (the default): you share folders, lift credential-file protection and answer agents at this computer. Full access hands all of that to your connected client and grants agent permission requests automatically.',
+      ? 'Full access is on: your client can share folders, read credential files, set up engines, answer agents and, on Windows, read the windows on your screen, and what a delegated agent asks permission for is granted automatically.'
+      : 'Guarded (the default): you share folders, lift credential-file protection and answer agents at this computer. Full access hands all of that to your connected client, lets it read the windows on your screen on Windows, and grants agent permission requests automatically.',
     [{ label: 'Guarded', value: 'guarded', primary: current === 'full' }, { label: 'Full access', value: 'full', warning: current !== 'full' }]);
     if (!choice || choice === current) return current;
     await client.call('access.update', { profile: choice }, { scoped: false });
@@ -307,7 +308,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     if (!target) throw new Error('The clipboard is not available here. The address is: ' + value);
     await target.writeText(value);
     new api.Notice(connection.tunnelId ? 'Copied the tunnel ID. In ChatGPT choose the Tunnel connection type.'
-      : connection.publicUrl || connection.url ? 'Copied the public MCP URL.' + (connection.temporaryAddress ? ' It ends in the key of this start: give it to your own client only.' : '') +
+      : connection.publicUrl || connection.url ? 'Copied the public MCP URL.' + (connection.temporaryAddress ? ' It ends in a key that stays until you ask for a new address: give it to your own client only.' : '') +
           (connection.remoteMcpVerified === false ? ' It has not been checked end to end yet.' : '')
         : 'Copied the local MCP URL. Cloud clients need a public connection.');
     return value;
@@ -318,7 +319,7 @@ function createObsidianRuntimeEntry(plugin, { client: suppliedClient, obsidian, 
     const saved = (await client.call('settings.read', {})).saved || {}, current = saved.connection?.kind || 'local';
     const choice = await ask('How should ChatGPT, Claude.ai and other cloud clients reach DevMate?',
       (current === 'local' ? 'Right now only apps on this computer can connect.' : 'Right now the connection is: ' + current + '.') +
-      ' A quick tunnel needs no account and no domain: DevMate starts cloudflared and gets an address, which changes whenever it starts again. For an address that stays (an OpenAI tunnel, a domain of your own) use "devmate connect" or VS Code.',
+      ' A quick tunnel needs no account and no domain: DevMate starts cloudflared and gets an address, which stays across restarts of DevMate and changes after a stop or a restart of the computer. For an address that stays (an OpenAI tunnel, a domain of your own) use "devmate connect" or VS Code.',
       [{ label: 'Quick tunnel', value: 'cloudflare-quick', primary: current !== 'cloudflare-quick' }, { label: 'This computer only', value: 'local' }]);
     if (!choice || choice === current) return null;
     let connection = { kind: 'local' };

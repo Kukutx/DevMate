@@ -1,0 +1,420 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { spawn, execFileSync } from 'node:child_process';
+import { DESKTOP_CAPABILITIES, NEVER_ACTED_ON, createDesktop, desktopLines } from '../runtime/desktop.mjs';
+import { DevMateService } from '../runtime/service.mjs';
+
+// A stand-in for the PowerShell that reads the windows: it says it is ready, and answers each request as `answers`
+// says (a value, a function of the params, or { error }). started counts how often it was started.
+function host(answers = {}, { ready = true } = {}) {
+  const made = [];
+  const spawnHost = () => {
+    const child = new EventEmitter(), stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
+    Object.assign(child, { stdin, stdout, stderr, killed: false, kill: () => { child.killed = true; } });
+    let buffer = '';
+    stdin.on('data', chunk => {
+      buffer += chunk;
+      for (let at = buffer.indexOf('\n'); at >= 0; at = buffer.indexOf('\n')) {
+        const { id, method, params } = JSON.parse(buffer.slice(0, at)); buffer = buffer.slice(at + 1);
+        child.asked.push({ method, params });
+        const answer = typeof answers[method] === 'function' ? answers[method](params) : answers[method];
+        if (answer === undefined) continue;
+        stdout.write(JSON.stringify(answer?.error ? { id, ok: false, error: answer.error } : { id, ok: true, result: answer }) + '\n');
+      }
+    });
+    child.asked = [];
+    if (ready) setImmediate(() => stdout.write('{"ready":true}\r\n'));
+    made.push(child);
+    return child;
+  };
+  return { spawnHost, made };
+}
+// The owner has switched the windows on (see the test of the switch).
+const on = () => ({ enabled: true });
+const window = (more = {}) => ({ handle: 1001, title: 'Untitled - Notepad', className: 'Notepad', pid: 42, program: 'notepad', x: 10, y: 20, width: 800, height: 600, minimized: false, focused: true, ...more });
+
+test('the windows are offered as reads of no project, each with its input checked before anything is started', async () => {
+  assert.deepEqual(DESKTOP_CAPABILITIES.map(item => [item.name, item.readOnly]), [['desktop.windows', true], ['desktop.snapshot', true], ['desktop.screenshot', true], ['desktop.act', false]]);
+  assert.ok(DESKTOP_CAPABILITIES.every(item => item.description.length > 8 && item.description.length < 400));
+  const { spawnHost, made } = host();
+  const desktop = createDesktop({ platform: 'win32', spawnHost, stored: on });
+  for (const [capability, input] of [['desktop.snapshot', {}], ['desktop.snapshot', { handle: -1 }], ['desktop.snapshot', { handle: 1, maxNodes: 5 }], ['desktop.windows', { query: '' }], ['desktop.screenshot', { handle: 1, extra: true }]])
+    await assert.rejects(desktop.call({ capability, input }), { code: 'invalid_input', notStarted: true }, capability);
+  await assert.rejects(desktop.call({ capability: 'desktop.click' }), { code: 'unknown_capability' });
+  assert.equal(made.length, 0, 'nothing was started for these');
+  // Another system says that windows are read on Windows, and starts nothing either.
+  await assert.rejects(createDesktop({ platform: 'darwin', spawnHost, stored: on }).call({ capability: 'desktop.windows' }), { code: 'not_supported', message: /Windows computer for now; this one runs darwin/ });
+  assert.equal(made.length, 0);
+  assert.equal(createDesktop({ platform: 'linux' }).list().status, 'not available on linux');
+  assert.equal(createDesktop({ platform: 'win32', stored: on }).list().status.split(';')[0], 'on');
+});
+
+test('desktop.act acts only in the programs the owner named, which full access does not name, and the worst never even when named', async () => {
+  const { spawnHost, made } = host({ act: params => params.ref === 9 ? { control: 'button', name: 'Save', waiting: true } : { control: 'edit', name: 'Name', waiting: false } });
+  let kept = { enabled: true }, full = true;
+  const desktop = createDesktop({ platform: 'win32', spawnHost, stored: value => value === undefined ? kept : (kept = value), fullAccess: () => full });
+  const act = (input, options) => desktop.call({ capability: 'desktop.act', input }, { who: 'client A', ...options });
+  // Reading on and full access chosen: no program is named, so nothing is acted in.
+  await assert.rejects(act({ handle: 5, ref: 2, action: 'invoke' }), { code: 'forbidden', notStarted: true, message: /^The owner has not named any program DevMate may act in.*"apps":\["notepad"\].*Full access does not do it for them/ });
+  assert.match(desktop.list().status, /; acting on controls: in no program; the owner names them at their computer/);
+  kept = { enabled: true, apps: ['notepad', 'winword'] }; full = false;
+  assert.match(desktop.list().status, /; acting on controls in: notepad, winword$/);
+  assert.deepEqual(await act({ handle: 5, ref: 2, action: 'setValue', value: 'Ada' }), { handle: 5, ref: 2, action: 'setValue', control: 'edit', name: 'Name', untrusted: true });
+  // The program decides, by the programs named and those never acted on; the caller's refs are its own.
+  assert.deepEqual(made[0].asked.at(-1), { method: 'act', params: { handle: 5, ref: 2, action: 'setValue', value: 'Ada', never: [...NEVER_ACTED_ON], apps: ['notepad', 'winword'], who: 'client A' } });
+  for (const program of ['windowsterminal', 'cmd', 'powershell', 'pwsh', 'code', 'vscodium', 'cursor', 'obsidian', 'chrome', 'msedge', 'msedgewebview2', 'firefox', 'claude', 'chatgpt', 'codex', 'explorer', 'regedit', 'mmc', 'taskmgr', 'rundll32', 'keepass', 'anydesk', 'notepad++']) assert.ok(NEVER_ACTED_ON.includes(program), program);
+  // A press the program has not finished (it opened a dialog of its own) says so.
+  assert.match((await act({ handle: 5, ref: 9, action: 'invoke' })).note, /^The program has not finished it after three seconds/);
+  // value goes with setValue alone, and holds no NUL; there is no focus; a read asks for none of it.
+  const asked = made[0].asked.length;
+  for (const input of [{ handle: 5, ref: 2, action: 'setValue' }, { handle: 5, ref: 2, action: 'invoke', value: 'x' }, { handle: 5, ref: 0, action: 'invoke' }, { handle: 5, ref: 2, action: 'click' }, { handle: 5, ref: 2, action: 'focus' },
+    { handle: 5, ref: 2, action: 'setValue', value: 'a' + String.fromCharCode(0) + 'b' }])
+    await assert.rejects(act(input), { code: 'invalid_input', notStarted: true }, JSON.stringify(input));
+  await assert.rejects(act({ handle: 5, ref: 2, action: 'invoke' }, { readOnly: true }), { code: 'forbidden', message: /acts in a window: call it with capability_call/ });
+  assert.equal(made[0].asked.length, asked);
+  // Reading switched off takes acting with it, also with full access, whatever is named.
+  kept = { enabled: false, apps: ['notepad'] }; full = true;
+  await assert.rejects(act({ handle: 5, ref: 2, action: 'invoke' }), { code: 'forbidden', message: /^The owner has switched off DevMate's reading of the windows of this computer\. / });
+  assert.equal(made[0].asked.length, asked);
+  // Full access reads where the owner made no choice, and acts in the programs they named.
+  kept = { apps: ['notepad'] };
+  await act({ handle: 5, ref: 2, action: 'invoke' });
+  assert.equal(made[0].asked.length, asked + 1);
+  desktop.close();
+  // An act that is not answered in time, or given up, may have been done: said as that.
+  const slow = createDesktop({ platform: 'win32', spawnHost: host({}).spawnHost, callMs: 100, stored: () => ({ enabled: true, apps: ['notepad'] }) });
+  await assert.rejects(slow.call({ capability: 'desktop.act', input: { handle: 5, ref: 2, action: 'invoke' } }), { code: 'desktop_timeout', message: /^desktop\.act was not answered within 0 seconds.*whether it was done is not known/ });
+  slow.close();
+  // A program taken out while an act waits for the program that reads the windows: it is not done afterwards.
+  let named = { enabled: true, apps: ['notepad', 'winword'] };
+  const held = host({}), queued = createDesktop({ platform: 'win32', spawnHost: held.spawnHost, stored: value => value === undefined ? named : (named = value) });
+  const waiting = queued.call({ capability: 'desktop.act', input: { handle: 5, ref: 2, action: 'invoke' } });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  queued.configure({ apps: ['winword'] });
+  await assert.rejects(waiting, { code: 'desktop_unavailable', message: /\(the programs DevMate may act in changed\)\. Whether the action was done is not known/ });
+  assert.equal(held.made[0].killed, true);
+  // A name is taken without .exe.
+  assert.deepEqual(queued.configure({ apps: ['Notepad.EXE'] }).settings.apps, ['notepad']);
+  queued.close();
+  // An act that waits for that program to start is sent with the programs named when it is sent.
+  let later = { enabled: true, apps: ['notepad', 'winword'] };
+  const starting = host({ act: { control: 'button', name: 'Save', waiting: false } }, { ready: false });
+  const slowly = createDesktop({ platform: 'win32', spawnHost: starting.spawnHost, stored: value => value === undefined ? later : (later = value) });
+  const sent = slowly.call({ capability: 'desktop.act', input: { handle: 5, ref: 2, action: 'invoke' } });
+  await new Promise(resolve => setImmediate(resolve));
+  slowly.configure({ apps: ['winword'] });
+  starting.made[0].stdout.write('{"ready":true}\n');
+  await sent;
+  assert.deepEqual(starting.made[0].asked.at(-1).params.apps, ['winword']);
+  slowly.close();
+});
+
+test('the windows are read only once the owner has switched that on at the computer, or chosen full access, and a connected client can only switch it off', async t => {
+  const { spawnHost, made } = host({ windows: { items: [] } });
+  let kept, full = false;
+  const desktop = createDesktop({ platform: 'win32', spawnHost, stored: value => value === undefined ? kept : (kept = value), fullAccess: () => full });
+  await assert.rejects(desktop.call({ capability: 'desktop.windows' }), { code: 'forbidden', notStarted: true, message: /^The owner has not let DevMate read the windows of this computer\..*capability\.configure.*"enabled":true/ });
+  assert.equal(made.length, 0, 'nothing was started');
+  assert.match(desktop.list().status, /^off: the owner switches it on at their computer, devmate capability\.configure/);
+  assert.deepEqual(desktop.settings().items, [{ engine: 'desktop', settings: { enabled: null, apps: [] } }]);
+  assert.equal(desktop.reading(), false);
+  // Full access shares everything, the windows too, where the owner made no choice.
+  full = true;
+  assert.deepEqual(await desktop.call({ capability: 'desktop.windows' }), { items: [], untrusted: true });
+  assert.match(desktop.list().status, /^on: the full access profile shares everything; the owner can switch it off at their computer, devmate capability\.configure .*"enabled":false/);
+  assert.equal(desktop.reading(), true);
+  // Switched off, they are not read with full access either; the program that read them ends, and setting the choice
+  // back to none would read them again, so a client may not do that.
+  const reader = made.at(-1);
+  desktop.configure({ enabled: false });
+  assert.equal(reader.killed, true);
+  await assert.rejects(desktop.call({ capability: 'desktop.windows' }), { code: 'forbidden', notStarted: true, message: /^The owner has switched off DevMate's reading of the windows of this computer\..*"enabled":true[^(]*\. Do not try/ });
+  assert.match(desktop.list().status, /^off: the owner switched it off, with full access too; they switch it on at their computer/);
+  assert.deepEqual([desktop.narrows({ enabled: null }), desktop.narrows({ enabled: false }), desktop.reading()], [false, true, false]);
+  desktop.configure({ enabled: null });
+  full = false;
+  await assert.rejects(desktop.call({ capability: 'desktop.windows' }), { code: 'forbidden' });
+  // The switch: on, then off again, which ends the program that reads them.
+  assert.deepEqual(desktop.configure({ enabled: true }), { engine: 'desktop', settings: { enabled: true, apps: [] }, scope: 'instance' });
+  await desktop.call({ capability: 'desktop.windows' });
+  const running = made.at(-1);
+  desktop.configure({ enabled: false });
+  assert.equal(running.killed, true);
+  desktop.configure({ enabled: null });
+  assert.deepEqual(kept, {});
+  for (const wrong of [{ enabled: 'yes' }, { input: true }, { apps: 'notepad' }, { apps: ['notepad.exe;rm'] }, { apps: Array(51).fill('a') }, { enabled: true, more: 1 }]) assert.throws(() => desktop.configure(wrong), { code: 'invalid_input' });
+  // Names are taken in small letters, without what surrounds them.
+  assert.deepEqual(desktop.configure({ apps: [' Notepad ', 'WINWORD'] }).settings.apps, ['notepad', 'winword']);
+  // A change that only takes away: reading off, programs taken out, either back to its default.
+  assert.deepEqual([{ enabled: false }, { apps: ['notepad'] }, { apps: [] }, { apps: null }, { enabled: null }, { enabled: false, apps: [] }].map(patch => desktop.narrows(patch)), [true, true, true, true, true, true]);
+  assert.deepEqual([{ enabled: true }, { apps: ['notepad', 'excel'] }, { apps: ['excel'] }, { input: false }, { apps: 'x' }].map(patch => desktop.narrows(patch)), [false, false, false, false, false]);
+  desktop.close();
+  // Through the runtime: the owner at the computer switches it on; a connected client only off, with full access too.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-desktop-switch-'));
+  const service = new DevMateService({ instanceRoot: path.join(temp, 'instance'), endpoint: '' });
+  t.after(async () => { await service.close(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  await service.ready;
+  const local = { id: 'owner', surface: 'local' }, connected = { id: 'owner' };
+  await assert.rejects(service.call('capability.configure', { engine: 'desktop', settings: { enabled: true } }, connected), { code: 'forbidden', message: /A connected client can only switch reading off or take programs out/ });
+  service.accessProfile = 'full';
+  await assert.rejects(service.call('capability.configure', { engine: 'desktop', settings: { enabled: true } }, connected), { code: 'forbidden', message: /^Reading the owner's windows, and the programs DevMate may act in, are the owner's to widen on their own computer/ });
+  service.accessProfile = 'guarded';
+  assert.deepEqual((await service.call('capability.configure', { engine: 'desktop', settings: { enabled: true, apps: ['notepad', 'excel'] } }, local)).settings, { enabled: true, apps: ['notepad', 'excel'] });
+  assert.deepEqual((await service.call('capability.settings', { engine: 'desktop' }, connected)).items[0].settings, { enabled: true, apps: ['notepad', 'excel'] });
+  // A client, in either profile, may take programs out, never put one in, nor switch reading on.
+  for (const profile of ['guarded', 'full']) {
+    service.accessProfile = profile;
+    await assert.rejects(service.call('capability.configure', { engine: 'desktop', settings: { apps: ['notepad', 'excel', 'calc'] } }, connected), { code: 'forbidden', message: /A connected client can only switch reading off or take programs out/ }, profile);
+  }
+  service.accessProfile = 'guarded';
+  assert.deepEqual((await service.call('capability.configure', { engine: 'desktop', settings: { apps: ['excel'] } }, connected)).settings, { enabled: true, apps: ['excel'] });
+  assert.deepEqual((await service.call('capability.configure', { engine: 'desktop', settings: { enabled: false } }, connected)).settings, { enabled: false, apps: ['excel'] });
+  assert.equal(service.store.setting('engine-settings.desktop').enabled, false, 'kept with the runtime');
+  // Switched off, with full access too; a client cannot set it back to no choice, which full access reads.
+  service.accessProfile = 'full';
+  await assert.rejects(service.call('capability.configure', { engine: 'desktop', settings: { enabled: null } }, connected), { code: 'forbidden' });
+  if (process.platform === 'win32') await assert.rejects(service.call('capability.query', { capability: 'desktop.windows' }, connected), { code: 'forbidden', message: /^The owner has switched off/ });
+  // The doctor says beside full access whether the windows of this screen are read.
+  const access = async () => (await service.call('runtime.doctor', {}, local)).checks.find(item => item.id === 'access').detail;
+  assert.doesNotMatch(await access(), /windows/);
+  await service.call('capability.configure', { engine: 'desktop', settings: { enabled: null } }, local);
+  if (process.platform === 'win32') assert.match(await access(), /, and read the windows on this screen \(switched off alone with: devmate capability\.configure --file <a file that holds .*"enabled":false/);
+  else assert.doesNotMatch(await access(), /windows/);
+});
+
+test('desktop.windows lists the windows the program read, kept by words of their title or program, as what programs say', async () => {
+  const items = [window(), window({ handle: 1002, title: '报告.docx - Word', program: 'WINWORD', focused: false })];
+  const { spawnHost, made } = host({ windows: { items } });
+  const desktop = createDesktop({ platform: 'win32', spawnHost, stored: on });
+  assert.deepEqual(await desktop.call({ capability: 'desktop.windows' }), { items, untrusted: true });
+  assert.deepEqual((await desktop.call({ capability: 'desktop.windows', input: { query: 'word' } })).items.map(item => item.handle), [1002]);
+  assert.deepEqual((await desktop.call({ capability: 'desktop.windows', input: { query: '报告' } })).items.map(item => item.handle), [1002]);
+  assert.equal(made.length, 1, 'one program for all of them');
+  desktop.close();
+  assert.equal(made[0].killed, true, 'and it ends with the runtime');
+});
+
+test('desktop.snapshot reads a window\'s controls as indented lines, never a password, kept by words and cut at maxNodes', async () => {
+  const nodes = [{ d: 0, t: 'Window', n: 'Settings', b: [0, 0, 800, 600] }, { d: 1, t: 'Edit', n: 'Name', v: 'Ada', a: 'name', s: ['focused'], b: [10, 10, 200, 20] },
+    { d: 1, t: 'Edit', n: 'Password', p: true }, { d: 1, t: 'CheckBox', n: 'Remember me', s: ['toggled=on'] }, { d: 2, t: 'Button', n: 'Save', s: ['disabled'] }];
+  assert.deepEqual(desktopLines(nodes), ['[1] window "Settings" @0,0,800,600', '  [2] edit "Name" value="Ada" #name (focused) @10,10,200,20', '  [3] edit "Password" (password field)', '  [4] checkbox "Remember me" (toggled=on)', '    [5] button "Save" (disabled)']);
+  // What a password field holds is not shown even where it was read; a snapshot numbers from the base it was given.
+  assert.deepEqual(desktopLines([{ d: 0, t: 'Edit', n: 'Password', v: 'hunter2', p: true }], 20000), ['[20001] edit "Password" (password field)']);
+  const { spawnHost, made } = host({ snapshot: params => ({ nodes: nodes.slice(0, params.most), more: params.most < nodes.length }) });
+  const desktop = createDesktop({ platform: 'win32', spawnHost, stored: on });
+  assert.deepEqual(await desktop.call({ capability: 'desktop.snapshot', input: { handle: 7 } }), { handle: 7, text: desktopLines(nodes).join('\n'), nodes: 5, untrusted: true });
+  const based = createDesktop({ platform: 'win32', spawnHost: host({ snapshot: { nodes: nodes.slice(0, 1), more: false, base: 30000 } }).spawnHost, stored: on });
+  assert.equal((await based.call({ capability: 'desktop.snapshot', input: { handle: 7 } })).text, '[30001] window "Settings" @0,0,800,600');
+  based.close();
+  const { base: first, ...asked } = made[0].asked.at(-1).params;
+  assert.deepEqual(asked, { handle: 7, most: 300, budget: 15000, who: '' });
+  // Where a snapshot's numbers begin is given by the runtime, a step further each time from a start of chance.
+  assert.ok(Number.isInteger(first) && first % 10000 === 0 && first > 0, String(first));
+  // With words, the whole window is read and the lines that have them kept, whatever their case.
+  assert.deepEqual(await desktop.call({ capability: 'desktop.snapshot', input: { handle: 7, query: 'SAVE', maxNodes: 10 } }), { handle: 7, text: '    [5] button "Save" (disabled)', nodes: 1, query: 'SAVE', matched: 1, untrusted: true });
+  assert.deepEqual(made[0].asked.at(-1).params, { handle: 7, most: 1500, budget: 15000, who: '', base: first + 10000 });
+  const cut = await desktop.call({ capability: 'desktop.snapshot', input: { handle: 7, maxNodes: 10 } });
+  assert.equal(cut.nodes, 5); assert.equal(cut.truncated, undefined);
+  desktop.close();
+  const many = Array.from({ length: 12 }, (_, at) => ({ d: 0, t: 'Text', n: 'line ' + at }));
+  const long = createDesktop({ platform: 'win32', spawnHost: host({ snapshot: params => ({ nodes: many.slice(0, params.most), more: params.most < many.length }) }).spawnHost, stored: on });
+  assert.deepEqual(await long.call({ capability: 'desktop.snapshot', input: { handle: 7, maxNodes: 10 } }), { handle: 7, text: desktopLines(many.slice(0, 10)).join('\n'), nodes: 10, truncated: true, untrusted: true });
+  long.close();
+});
+
+test('desktop.screenshot is handed on as a picture, of a window or of the whole screen, with where it is and how it was scaled', async () => {
+  const { spawnHost, made } = host({ screenshot: params => params.handle === null ? { base64: 'U0NSRUVO', width: 3840, height: 1234, x: -2560, y: -355, scale: 0.857 } : { base64: 'V0lORE9X', width: 800, height: 600, x: 10, y: 20, scale: 1 } });
+  const desktop = createDesktop({ platform: 'win32', spawnHost, stored: on });
+  assert.deepEqual(await desktop.call({ capability: 'desktop.screenshot', input: { handle: 1001 } }), { content: [{ type: 'image', data: 'V0lORE9X', mimeType: 'image/png' }, { type: 'text', text: '{"handle":1001,"x":10,"y":20,"width":800,"height":600}' }] });
+  assert.deepEqual(await desktop.call({ capability: 'desktop.screenshot' }), { content: [{ type: 'image', data: 'U0NSRUVO', mimeType: 'image/png' }, { type: 'text', text: '{"screen":true,"x":-2560,"y":-355,"width":3840,"height":1234,"scale":0.857}' }] });
+  assert.deepEqual(made[0].asked.map(asked => asked.params), [{ handle: 1001 }, { handle: null }]);
+  desktop.close();
+  // A window that did not draw itself is copied from the screen, with what covers it, and says so.
+  const covered = createDesktop({ platform: 'win32', spawnHost: host({ screenshot: { base64: 'U0NSRUVO', width: 10, height: 10, x: 0, y: 0, scale: 1, fromScreen: true } }).spawnHost, stored: on });
+  assert.match((await covered.call({ capability: 'desktop.screenshot', input: { handle: 5 } })).content[1].text, /"note":"The window did not draw itself: this is the screen where it is, with whatever covers it\."/);
+  covered.close();
+});
+
+test('what the program says it cannot do is passed on with its code, and a program that hangs, ends or does not start is replaced at the next call', async () => {
+  let gone = { error: { code: 'not_found', message: 'No window has the handle 5 any more.' } };
+  const { spawnHost, made } = host({ snapshot: () => gone, windows: { items: [] } });
+  const desktop = createDesktop({ platform: 'win32', spawnHost, callMs: 200, stored: on });
+  await assert.rejects(desktop.call({ capability: 'desktop.snapshot', input: { handle: 5 } }), { code: 'not_found', message: 'No window has the handle 5 any more.' });
+  gone = { error: { code: 'made_up', message: 'x'.repeat(600) } };
+  await assert.rejects(desktop.call({ capability: 'desktop.snapshot', input: { handle: 5 } }), error => error.code === 'desktop_error' && error.message.length === 500);
+  // No answer: the call ends after its time, the program with it, and the next call starts another.
+  gone = undefined;
+  await assert.rejects(desktop.call({ capability: 'desktop.snapshot', input: { handle: 5 } }), { code: 'desktop_timeout' });
+  assert.equal(made[0].killed, true);
+  assert.deepEqual(await desktop.call({ capability: 'desktop.windows' }), { items: [], untrusted: true });
+  assert.equal(made.length, 2);
+  // A program that ends while a call waits fails that call, and the next one starts anew.
+  gone = undefined;
+  const waiting = desktop.call({ capability: 'desktop.snapshot', input: { handle: 5 } });
+  await new Promise(resolve => setImmediate(resolve));
+  made[1].emit('exit', 1);
+  await assert.rejects(waiting, { code: 'desktop_unavailable', message: /ended/ });
+  await desktop.call({ capability: 'desktop.windows' });
+  assert.equal(made.length, 3);
+  desktop.close();
+  // One that never says it is ready, and one that cannot be started.
+  const silent = createDesktop({ platform: 'win32', spawnHost: host({}, { ready: false }).spawnHost, startMs: 100, stored: on });
+  await assert.rejects(silent.call({ capability: 'desktop.windows' }), { code: 'desktop_unavailable', message: /did not start within/ });
+  const missing = createDesktop({ platform: 'win32', spawnHost: () => { const child = host({}, { ready: false }).spawnHost(); setImmediate(() => child.emit('error', new Error('spawn ENOENT'))); return child; }, stored: on });
+  await assert.rejects(missing.call({ capability: 'desktop.windows' }), { code: 'desktop_unavailable', message: /could not be started: spawn ENOENT/ });
+});
+
+test('the program that reads the windows ends after a while without a call', async () => {
+  const { spawnHost, made } = host({ windows: { items: [] } });
+  const desktop = createDesktop({ platform: 'win32', spawnHost, idleMs: 50, stored: on });
+  await desktop.call({ capability: 'desktop.windows' });
+  await new Promise(resolve => setTimeout(resolve, 120));
+  assert.equal(made[0].killed, true);
+  await desktop.call({ capability: 'desktop.windows' });
+  assert.equal(made.length, 2);
+  desktop.close();
+});
+
+test('the windows are listed beside the browser, and a call for them needs no project', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-desktop-'));
+  const service = new DevMateService({ instanceRoot: path.join(temp, 'instance'), endpoint: '' });
+  t.after(async () => { await service.close(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  await service.ready;
+  const owner = { id: 'owner', surface: 'local' }, connected = { id: 'owner' };
+  const listed = await service.call('capability.list', { engine: 'desktop' }, connected);
+  assert.deepEqual(listed.engines.map(engine => [engine.id, engine.capabilities.map(item => item.name)]), [['desktop', ['desktop.windows', 'desktop.snapshot', 'desktop.screenshot', 'desktop.act']]]);
+  assert.equal((await service.call('capability.list', { name: 'desktop.act' }, owner)).hint.startsWith('Invoke with capability_call'), true);
+  await assert.rejects(service.call('capability.query', { capability: 'desktop.act', input: { handle: 1, ref: 1, action: 'invoke' } }, connected), { code: 'forbidden' });
+  assert.equal((await service.call('capability.list', { name: 'desktop.snapshot' }, owner)).capability.inputSchema.required[0], 'handle');
+  // A call goes to the engine without a project: here one that refuses before anything is started.
+  await assert.rejects(service.call('capability.query', { capability: 'desktop.snapshot', input: {} }, connected), { code: 'invalid_input' });
+  await assert.rejects(service.call('capability.call', { capability: 'desktop.windows', input: { query: '' } }, connected), { code: 'invalid_input' });
+});
+
+test('on Windows the windows are read by the system\'s own PowerShell', { skip: process.platform !== 'win32' && 'the windows are read on Windows', timeout: 90000 }, async () => {
+  const desktop = createDesktop({ stored: on });
+  try {
+    const { items } = await desktop.call({ capability: 'desktop.windows' });
+    assert.ok(Array.isArray(items));
+    for (const item of items) assert.deepEqual(Object.keys(item).sort(), ['className', 'focused', 'handle', 'height', 'minimized', 'pid', 'program', 'title', 'width', 'x', 'y']);
+    const screen = await desktop.call({ capability: 'desktop.screenshot' });
+    assert.equal(Buffer.from(screen.content[0].data, 'base64').subarray(1, 4).toString('latin1'), 'PNG');
+    const shown = items.find(item => !item.minimized && item.width > 0);
+    if (shown) assert.equal(typeof (await desktop.call({ capability: 'desktop.snapshot', input: { handle: shown.handle, maxNodes: 20 } })).text, 'string');
+    await assert.rejects(desktop.call({ capability: 'desktop.snapshot', input: { handle: 1 } }), { code: 'not_found' });
+  } finally { desktop.close(); }
+});
+
+// A window of a program of its own, made here: a field, a box to tick, a button, a password field that holds a
+// password, a button that is switched off, a field that is read only, a field of several lines whose program counts
+// its changes, and a rich text field. A second window stands for the one where a program asks where to save a file:
+// it holds a window of the class the system's file dialog has. Both stand far off the screen, so that nobody sees
+// them, and are read and acted on where they are.
+const CHECK_PROGRAM = String.raw`using System; using System.Drawing; using System.Runtime.InteropServices; using System.Windows.Forms;
+public static class Check {
+  delegate IntPtr Proc(IntPtr hwnd, uint message, IntPtr w, IntPtr l);
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct Kind { public uint style; public Proc proc; public int extra, windowExtra; public IntPtr instance, icon, cursor, background; public string menu, name; }
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern ushort RegisterClassW(ref Kind kind);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateWindowExW(uint exStyle, string kind, string title, uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+  [DllImport("user32.dll")] static extern IntPtr DefWindowProcW(IntPtr hwnd, uint message, IntPtr w, IntPtr l);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr LoadLibraryW(string name);
+  static Proc kept = DefWindowProcW;
+  [STAThread] public static void Main() {
+  var form = new Form { Text = "DevMate desktop check", StartPosition = FormStartPosition.Manual, Location = new Point(-20000, -20000), Width = 420, Height = 260 };
+  var name = new TextBox { Left = 10, Top = 10, Width = 200, AccessibleName = "Name" };
+  var keep = new CheckBox { Text = "Keep", Left = 10, Top = 40 };
+  var save = new Button { Text = "Save", Left = 10, Top = 70 };
+  var secret = new TextBox { Left = 220, Top = 10, Width = 150, UseSystemPasswordChar = true, AccessibleName = "Secret", Text = "hunter2" };
+  var erase = new Button { Text = "Erase", Left = 120, Top = 70, Enabled = false };
+  var shown = new TextBox { Left = 220, Top = 40, Width = 150, ReadOnly = true, Text = "fixed", AccessibleName = "Fixed" };
+  var notes = new TextBox { Left = 10, Top = 110, Width = 200, Height = 40, Multiline = true, AccessibleName = "Notes" };
+  var rich = new RichTextBox { Left = 220, Top = 110, Width = 150, Height = 40, AccessibleName = "Rich" };
+  save.Click += (s, e) => form.Text = "Saved " + name.Text + (keep.Checked ? " kept" : "");
+  erase.Click += (s, e) => form.Text = "Erased";
+  notes.TextChanged += (s, e) => form.Text = "Noted " + notes.Text;
+  form.Controls.AddRange(new Control[] { name, keep, save, secret, erase, shown, notes, rich });
+  var files = new Form { Text = "DevMate file check", StartPosition = FormStartPosition.Manual, Location = new Point(-20000, -19000), Width = 300, Height = 120 };
+  files.Controls.Add(new TextBox { Left = 10, Top = 10, Width = 200, AccessibleName = "File name" });
+  files.Load += (s, e) => {
+    var kind = new Kind { proc = kept, instance = Marshal.GetHINSTANCE(typeof(Check).Module), name = "DUIViewWndClassName" };
+    RegisterClassW(ref kind);
+    CreateWindowExW(0, "DUIViewWndClassName", "", 0x50000000, 10, 40, 20, 20, files.Handle, IntPtr.Zero, kind.instance, IntPtr.Zero);
+  };
+  // A rich text field of the older kind, for ANSI text, which reads a text that begins as RTF does for formatting.
+  form.Load += (s, e) => { LoadLibraryW("riched20.dll"); CreateWindowExW(0, "RichEdit20A", "old rich", 0x50800004, 220, 160, 150, 30, form.Handle, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero); files.Show(); };
+  Application.Run(form);
+} }`;
+test('on Windows a control of a program the owner named is acted on by its own messages: a field filled, a box ticked, a button pressed; a password field, a switched-off button and a read-only field left alone', { skip: process.platform !== 'win32' && 'the windows are acted on on Windows', timeout: 120000 }, async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-desktop-act-')), program = path.join(temp, 'devmate-desktop-check.exe'), source = path.join(temp, 'check.cs');
+  fs.writeFileSync(source, CHECK_PROGRAM);
+  execFileSync(process.env.SystemRoot + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    'Add-Type -TypeDefinition ([IO.File]::ReadAllText($env:CHECK_SOURCE)) -ReferencedAssemblies System.Windows.Forms, System.Drawing -OutputAssembly $env:CHECK_PROGRAM -OutputType WindowsApplication'],
+    { env: { ...process.env, CHECK_SOURCE: source, CHECK_PROGRAM: program }, windowsHide: true });
+  const shown = spawn(program, [], { stdio: 'ignore' });
+  const desktop = createDesktop({ stored: () => ({ enabled: true, apps: ['devmate-desktop-check'] }) });
+  t.after(() => { desktop.close(); shown.kill(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
+  let window;
+  for (let tries = 0; tries < 100 && !window; tries++) { window = (await desktop.call({ capability: 'desktop.windows', input: { query: 'DevMate desktop check' } })).items[0]; if (!window) await new Promise(resolve => setTimeout(resolve, 100)); }
+  assert.ok(window, 'the window is there'); assert.equal(window.program, 'devmate-desktop-check');
+  const lines = (await desktop.call({ capability: 'desktop.snapshot', input: { handle: window.handle } })).text;
+  const ref = pattern => Number(new RegExp('\\[(\\d+)\\] ' + pattern).exec(lines)?.[1]);
+  const [name, keep, save, secret, erase, fixed, notes, rich] = [ref('edit "Name"'), ref('checkbox "Keep"'), ref('button "Save"'), ref('edit "Secret" \\(password field\\)'), ref('button "Erase" \\(disabled\\)'), ref('edit "Fixed"'), ref('edit "Notes"'), ref('edit "Rich"')];
+  assert.ok(name && keep && save && secret && erase && fixed && notes && rich, lines);
+  assert.doesNotMatch(lines, /hunter2/, 'what the password field holds is not read');
+  const act = input => desktop.call({ capability: 'desktop.act', input: { handle: window.handle, ...input } });
+  const titled = async wanted => {
+    let title;
+    for (let tries = 0; tries < 50 && title !== wanted; tries++) { title = (await desktop.call({ capability: 'desktop.windows', input: { query: wanted.split(' ')[0] } })).items[0]?.title; if (title !== wanted) await new Promise(resolve => setTimeout(resolve, 100)); }
+    return title;
+  };
+  assert.deepEqual(await act({ ref: name, action: 'setValue', value: 'Ada' }), { handle: window.handle, ref: name, action: 'setValue', control: 'edit', name: 'Name', untrusted: true });
+  assert.equal((await act({ ref: keep, action: 'toggle' })).control, 'checkbox');
+  assert.equal((await act({ ref: save, action: 'invoke' })).control, 'button');
+  assert.equal(await titled('Saved Ada kept'), 'Saved Ada kept');
+  // A field of several lines tells its program that its text changed, as when it is typed into.
+  await act({ ref: notes, action: 'setValue', value: 'Hi' });
+  assert.equal(await titled('Noted Hi'), 'Noted Hi');
+  // A rich text field of today takes a text that begins as RTF does as the text; one of the older kind would take it
+  // for formatting, and is handed no text that begins with "{".
+  assert.equal((await act({ ref: rich, action: 'setValue', value: '{\\rtf1 \\b x}' })).control, 'edit');
+  // Not into a password field; not a button switched off nor a field read only; not what a classic control is not
+  // pressed or filled by; not a ref no snapshot of this caller's gave.
+  await assert.rejects(act({ ref: secret, action: 'setValue', value: 'x' }), { code: 'forbidden', message: /password field/ });
+  await assert.rejects(act({ ref: erase, action: 'invoke' }), { code: 'invalid_input', message: /switched off \(disabled or read only\)/ });
+  await assert.rejects(act({ ref: fixed, action: 'setValue', value: 'changed' }), { code: 'invalid_input', message: /switched off \(disabled or read only\)/ });
+  await assert.rejects(act({ ref: keep, action: 'setValue', value: 'x' }), { code: 'invalid_input', message: /^DevMate does not setValue this control of a classic Windows program: it takes toggle\.$/ });
+  await assert.rejects(act({ ref: save, action: 'expand' }), { code: 'invalid_input', message: /^DevMate does not expand this control of a classic Windows program: it takes invoke\.$/ });
+  await assert.rejects(act({ ref: 999, action: 'invoke' }), { code: 'not_found', message: /No desktop\.snapshot of yours of this window gave the ref 999/ });
+  await assert.rejects(desktop.call({ capability: 'desktop.act', input: { handle: window.handle, ref: save, action: 'invoke' } }, { who: 'another client' }), { code: 'not_found', message: /No desktop\.snapshot of yours/ });
+  // A later snapshot numbers its lines anew: a ref of the one before is not taken.
+  assert.match((await desktop.call({ capability: 'desktop.snapshot', input: { handle: window.handle, query: 'Fixed' } })).text, /value="fixed"/);
+  await assert.rejects(act({ ref: save, action: 'invoke' }), { code: 'not_found', message: /No desktop\.snapshot of yours of this window gave the ref/ });
+  // (The rich text field of today holds what it was given as its text, with the end of paragraph it adds.)
+  assert.match((await desktop.call({ capability: 'desktop.snapshot', input: { handle: window.handle, query: 'Rich' } })).text, /value="\{\\\\rtf1 \\\\b x\}(\\r)?"/);
+  const old = Number(/\[(\d+)\] edit[^\n]*value="old rich/.exec((await desktop.call({ capability: 'desktop.snapshot', input: { handle: window.handle } })).text)?.[1]);
+  assert.ok(old, 'the older rich text field is there');
+  for (const value of ['{\\rtf1 \\b x}', '{\\urtf1 x}', '{\\rt' + String.fromCharCode(0x301) + 'f1 x}']) await assert.rejects(act({ ref: old, action: 'setValue', value }), { code: 'invalid_input', message: /older kind of rich text field/ }, value);
+  assert.equal((await act({ ref: old, action: 'setValue', value: 'plain' })).control, 'edit');
+  // Not in the window where a program asks where to save a file, in a program the owner named all the same.
+  const files = (await desktop.call({ capability: 'desktop.windows', input: { query: 'DevMate file check' } })).items[0];
+  assert.ok(files, 'the window of the file dialog is there');
+  const where = Number(/\[(\d+)\] edit "File name"/.exec((await desktop.call({ capability: 'desktop.snapshot', input: { handle: files.handle } })).text)?.[1]);
+  await assert.rejects(desktop.call({ capability: 'desktop.act', input: { handle: files.handle, ref: where, action: 'setValue', value: 'C:\\x.cmd' } }), { code: 'forbidden', message: /^This is the window where a program asks where to save a file/ });
+  // A program the owner did not name is not acted in.
+  const other = createDesktop({ stored: () => ({ enabled: true, apps: ['notepad'] }) });
+  try {
+    await other.call({ capability: 'desktop.snapshot', input: { handle: window.handle } });
+    await assert.rejects(other.call({ capability: 'desktop.act', input: { handle: window.handle, ref: save, action: 'invoke' } }), { code: 'forbidden', message: /^The owner has not named devmate-desktop-check among the programs DevMate may act in/ });
+  } finally { other.close(); }
+  // A program among those never acted on is not acted in, even where the owner names it.
+  const careful = createDesktop({ stored: () => ({ enabled: true, apps: ['devmate-desktop-check'] }), never: [...NEVER_ACTED_ON, 'devmate-desktop-check'] });
+  try {
+    await careful.call({ capability: 'desktop.snapshot', input: { handle: window.handle } });
+    await assert.rejects(careful.call({ capability: 'desktop.act', input: { handle: window.handle, ref: save, action: 'invoke' } }), { code: 'forbidden', message: /^DevMate does not act in devmate-desktop-check, even where the owner names it/ });
+  } finally { careful.close(); }
+});

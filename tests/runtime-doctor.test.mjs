@@ -620,6 +620,39 @@ test('the VS Code connection wizard stores the token privately, saves a signed-i
   answers.picks = ['Guarded'];
   assert.equal(await commands.get('devMate.runtime.accessProfile')(), 'guarded');
   assert.deepEqual(named('access.update'), [{ profile: 'full' }, { profile: 'guarded' }]); assert.equal(confirmations.length, 1);
+  // A restart is a stop to start again: a quick tunnel, and its address, stay.
+  const stops = []; client.stop = async options => { stops.push(options); running = false; };
+  await commands.get('devMate.runtime.restart')();
+  assert.deepEqual(stops, [{ again: true }]);
+  // DevMate is added to a client on this computer, or taken out, by the owner here: DevMate's own command line does it.
+  const commanded = [];
+  client.command = async args => { commanded.push(args); return args.length === 1 ? { clients: [{ client: 'claude-code', registered: true, file: 'C:\\u\\.claude.json' }, { client: 'codex', registered: false, file: 'C:\\u\\.codex\\config.toml' }] } : { next: ['Start a new session.'] }; };
+  answers.picks = ['Add DevMate to Codex']; await commands.get('devMate.runtime.clients')();
+  answers.picks = ['Remove DevMate from Claude Code']; await commands.get('devMate.runtime.clients')();
+  assert.deepEqual(commanded, [['client'], ['client', 'add', 'codex'], ['client'], ['client', 'remove', 'claude-code']]);
+  assert.equal(messages.at(-1), 'Start a new session.'); assert.match(confirmations.at(-1).message, /Remove DevMate from Claude Code/);
+  // A new quick tunnel address: only for a quick tunnel, asked first, then DevMate is restarted for it.
+  commanded.length = 0; stops.length = 0;
+  await commands.get('devMate.runtime.newAddress')();
+  assert.deepEqual(commanded, []); assert.match(messages.at(-1), /does not use a Cloudflare quick tunnel/);
+  saved = { ...saved, connection: { kind: 'cloudflare-quick', executable: 'C:\\cf\\cloudflared.exe' } };
+  // Declined, nothing happens.
+  const confirm = vscode.window.showWarningMessage; vscode.window.showWarningMessage = async (message, options) => { confirmations.push({ message, ...options }); return undefined; };
+  await commands.get('devMate.runtime.newAddress')();
+  assert.deepEqual([commanded, stops], [[], []]); assert.equal(confirmations.at(-1).modal, true); assert.match(confirmations.at(-1).message, /Give the quick tunnel a new address\?/);
+  assert.match(confirmations.at(-1).detail, /stops working at once/);
+  vscode.window.showWarningMessage = confirm;
+  await commands.get('devMate.runtime.newAddress')();
+  assert.deepEqual(commanded, [['connect', 'quick', '--new-address']]); assert.deepEqual(stops, [{ again: true }]); assert.match(messages.at(-1), /new address/);
+  // The windows of this computer, switched on and the programs named by the owner here (on Windows).
+  if (process.platform === 'win32') {
+    const desktop = { enabled: null, apps: [] };
+    const call = client.call;
+    client.call = async (name, input) => name === 'capability.settings' ? { items: [{ engine: 'desktop', settings: desktop }] } : call(name, input);
+    answers.picks = ['Read the windows']; await commands.get('devMate.runtime.desktopWindows')();
+    answers.picks = ['Programs DevMate may act in…']; answers.inputs = ['notepad, Calc ,']; await commands.get('devMate.runtime.desktopWindows')();
+    assert.deepEqual(named('capability.configure'), [{ engine: 'desktop', settings: { enabled: true } }, { engine: 'desktop', settings: { apps: ['notepad', 'Calc'] } }]);
+  }
   await entry.deactivate();
 });
 
@@ -659,7 +692,7 @@ test('the editor says when a new address can be reached from the cloud, once, an
   // Checked end to end: this is the moment a client in the cloud can connect. It is said once, with the address one click away.
   route = { ...quick, phase: 'connected', publicUrl: first, remoteMcpVerified: true, verification: { url: first, verified: true, reachable: true } };
   assert.equal((await one.look()).text, '$(plug) DevMate'); assert.match(one.bar.tooltip, /Reachable from the cloud/);
-  assert.equal(said.length, 2); assert.match(said[0], /can be reached from the cloud at a new address/); assert.match(said[1], /Copied the public MCP URL\. It ends in the key of this start/); assert.deepEqual(copied, [first]);
+  assert.equal(said.length, 2); assert.match(said[0], /can be reached from the cloud at a new address/); assert.match(said[1], /Copied the public MCP URL\. It ends in a key that stays until you ask for a new address/); assert.deepEqual(copied, [first]);
   await one.look(); assert.equal(said.length, 2, 'not said again');
   // Another window of the same editor does not repeat it, and what the editor remembers is not the address: that ends in the key.
   const two = window(); await two.start(); await two.look();

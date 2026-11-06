@@ -22,7 +22,7 @@ function fixture(t, { registered = true, running = true, settings = {}, answers 
     status: async () => state.running ? { running: true, state: 'ready', record: { generation: state.generation }, ...(state.outdated ? { outdated: true } : {}), ...(state.filesGone ? { health: { filesGone: true } } : {}) }
       : { running: false, state: 'stopped', ...(state.crashed ? { crashed: true } : {}) },
     start: async () => { state.running = true; },
-    stop: async () => { state.running = false; state.hosts = []; state.windows.clear(); },
+    stop: async (options = {}) => { state.stops = [...(state.stops || []), options]; state.running = false; state.hosts = []; state.windows.clear(); },
     operations: async () => ({ items: [] }),
     // A single-use sign-in link for opening the workbench; never the base of another address.
     workbenchUrl: async () => { state.workbenchLinks++; return 'http://127.0.0.1:8788/?code=single-use'; },
@@ -149,6 +149,8 @@ test('stopping and restarting from Obsidian asks first, and the vault is attache
   assert.deepEqual([f.state.hosts.length, f.state.statusText, f.entry.status().autoAttach], [1, 'DevMate: vault attached', true]);
   await f.run('restart');
   assert.deepEqual([f.state.running, f.state.hosts.length], [true, 1]);
+  // A stop is a stop; a restart stops to start again, so that a quick tunnel and its address stay.
+  assert.deepEqual(f.state.stops, [{}, { again: true }]);
   assert.deepEqual(f.state.asked, ['Stop the shared DevMate runtime?', 'Stop the shared DevMate runtime?', 'Restart the shared DevMate runtime?']);
   // An explicit Detach does hold.
   await f.run('detach-vault');
@@ -275,7 +277,7 @@ test('Copy MCP URL and Run doctor use the runtime operations', async t => {
   assert.equal(f.state.copied.length, 2); assert.match(f.state.notices.at(-1), /has not been given its address yet/);
   f.state.connection = { kind: 'cloudflare-quick', phase: 'connected', temporaryAddress: true, remoteMcpVerified: true, publicUrl: 'https://fixture.trycloudflare.com/mcp/key-of-this-start' };
   await f.run('copy-mcp-url');
-  assert.equal(f.state.copied.at(-1), 'https://fixture.trycloudflare.com/mcp/key-of-this-start'); assert.match(f.state.notices.at(-1), /ends in the key of this start/);
+  assert.equal(f.state.copied.at(-1), 'https://fixture.trycloudflare.com/mcp/key-of-this-start'); assert.match(f.state.notices.at(-1), /ends in a key that stays until you ask for a new address/);
   const result = await f.entry.doctor();
   assert.equal(result.text, 'DevMate 4.0.0 — attention\n[ok] node: Node 24\n[warn] security: No sign-in\n    -> Require sign-in\n[info] connection: Local only\n    -> Configure a connection');
   // What is merely worth knowing is listed, and not counted as needing attention.

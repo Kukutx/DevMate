@@ -2,7 +2,7 @@
   "name": "devmate-agent",
   "displayName": "DevMate Agent",
   "description": "Give ChatGPT, Claude and any MCP client real hands on your own computer: files, shell, Git, editor diagnostics and local coding agents, without a paid tunnel.",
-  "version": "4.0.6",
+  "version": "4.0.7",
   "license": "MIT",
   "publisher": "kukutx",
   "icon": "assets/icon.png",
@@ -142,6 +142,23 @@
         "command": "devMate.runtime.configureConnection",
         "title": "%command.configureConnection%",
         "category": "DevMate"
+      },
+      {
+        "command": "devMate.runtime.clients",
+        "title": "%command.clients%",
+        "category": "DevMate"
+      },
+      {
+        "command": "devMate.runtime.newAddress",
+        "title": "%command.newAddress%",
+        "category": "DevMate",
+        "enablement": "devMate.running"
+      },
+      {
+        "command": "devMate.runtime.desktopWindows",
+        "title": "%command.desktopWindows%",
+        "category": "DevMate",
+        "enablement": "isWindows && devMate.running"
       }
     ],
     "views": {

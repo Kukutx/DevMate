@@ -101,10 +101,44 @@ test('CLI delegates lifecycle to the selected isolated instance without opening 
     clientFactory:()=>{throw new Error('No implicit browser/client');}
   }),0);
   assert.deepEqual(received,{instanceRoot:instance,port:34567});
-  const order=[];
+  const order=[],stopped=[];
   assert.equal(await main(['restart','--instance',instance],{stdout:output(),stderr,
-    stop:async()=>{order.push('stop');return{stopped:true};},launch:async()=>{order.push('start');return{started:true};}}),0);
+    stop:async options=>{order.push('stop');stopped.push(options.again);return{stopped:true};},launch:async()=>{order.push('start');return{started:true};}}),0);
   assert.deepEqual(order,['stop','start']);
+  // A restart says that it starts again at once (a quick tunnel and its address stay); a stop does not.
+  assert.equal(await main(['stop','--instance',instance],{stdout:output(),stderr,stop:async options=>{stopped.push(options.again);return{stopped:true};}}),0);
+  assert.deepEqual(stopped,[true,undefined]);
+});
+
+test('devmate connect quick --new-address takes the key of the address away, and only a quick tunnel takes it', async t => {
+  const instance=fs.mkdtempSync(path.join(os.tmpdir(),'devmate-cli-new-address-'));t.after(()=>fs.rmSync(instance,{recursive:true,force:true}));
+  const { quickTunnelKey }=await import('../runtime/cloudflare-connection.mjs');
+  const key=quickTunnelKey(instance),file=path.join(instance,'quick-tunnel.key');
+  const run=async(...args)=>{const stdout=output(),stderr=output();return{code:await main(['connect',...args,'--executable',process.execPath,'--instance',instance],{stdout,stderr}),stdout:stdout.text,stderr:stderr.text};};
+  // Where DevMate connects another way there is no quick tunnel address to renew: the connection there is stays (it
+  // was replaced by a quick tunnel without sign-in).
+  const none=await run('quick','--new-address');
+  assert.equal(none.code,1);assert.match(none.stderr,/There is no quick tunnel address to renew: this DevMate connects by local/);
+  assert.equal(fs.existsSync(path.join(instance,'config.json')),false);
+  assert.equal((await run('quick')).code,0);
+  assert.equal(quickTunnelKey(instance),key,'the key stays where no new address is asked for');
+  const renewed=await run('quick','--new-address');
+  assert.equal(renewed.code,0,renewed.stderr);assert.equal(fs.existsSync(file),false);
+  assert.notEqual(quickTunnelKey(instance),key);
+  // Asked for alone, a new address changes nothing else: the connection stays as it is saved (the cloudflared it
+  // names, OpenAI's tunnel beside it), and only the key goes.
+  const configFile=path.join(instance,'config.json'),saved=JSON.parse(fs.readFileSync(configFile,'utf8'));
+  saved.openaiTunnel={tunnelId:'tunnel_kept'};fs.writeFileSync(configFile,JSON.stringify(saved));
+  const before=fs.readFileSync(configFile,'utf8'),again=quickTunnelKey(instance);
+  const stdout=output(),stderr=output(),alone=await main(['connect','quick','--new-address','--instance',instance],{stdout,stderr});
+  assert.equal(alone,0,stderr.text);assert.match(stdout.text,/"renewed": true/);
+  assert.equal(fs.readFileSync(configFile,'utf8'),before);assert.notEqual(quickTunnelKey(instance),again);
+  // With an option a quick tunnel does not take, it is refused, as without --new-address: not a new key said as done.
+  const stray=output(),strayErr=output(),key2=quickTunnelKey(instance);
+  assert.equal(await main(['connect','quick','--new-address','--url','https://devmate.example.com/mcp','--instance',instance],{stdout:stray,stderr:strayErr}),1);
+  assert.match(strayErr.text,/does not take --url/);assert.equal(quickTunnelKey(instance),key2);
+  const refused=await run('cloudflare','--url','https://devmate.example.com/mcp','--new-address');
+  assert.equal(refused.code,1);assert.match(refused.stderr,/does not take --new-address/);
 });
 
 test('the commands people copy from print just the value: MCP address, sign-in code, workbench link', async () => {
@@ -127,7 +161,7 @@ test('the commands people copy from print just the value: MCP address, sign-in c
   assert.deepEqual([early.code,early.stdout],[1,'']);assert.match(early.stderr,/has not been given its address yet/);
   const quick=await run(['mcp-url'],{kind:'cloudflare-quick',phase:'connected',temporaryAddress:true,remoteMcpVerified:false,publicUrl:'https://fixture.trycloudflare.com/mcp/key-of-this-start'});
   assert.deepEqual([quick.code,quick.stdout],[0,'https://fixture.trycloudflare.com/mcp/key-of-this-start\n']);
-  assert.match(quick.stderr,/ends in the key of this start/);assert.match(quick.stderr,/not been checked end to end yet/);
+  assert.match(quick.stderr,/ends in a key that stays until you ask for a new address/);assert.match(quick.stderr,/not been checked end to end yet/);
   assert.equal((await run(['login-code'],{})).stdout,'dml_once\n');
   const link=await run(['ui'],{});
   assert.equal(link.stdout,'http://127.0.0.1:8788/?code=once\n');assert.deepEqual(link.opened,[]);

@@ -51,9 +51,17 @@ Connecting an AI client
   devmate mcp-url                   the address to enter in ChatGPT, Claude or another MCP client
   devmate mcp                       serve MCP on standard input and output, for clients that start
                                     their servers as a program; starts the runtime when needed
+  devmate client add claude-code | codex | claude-desktop
+                                    make DevMate one of that client's MCP servers on this computer, in its own
+                                    settings; it keeps working after DevMate is updated
+  devmate client remove <client>    take it out again
+  devmate client                    which clients DevMate is added to
   devmate connect local
-  devmate connect quick             a Cloudflare quick tunnel: no account, no domain, nothing to set up;
-                                    the address changes whenever it starts again
+  devmate connect quick [--new-address]
+                                    a Cloudflare quick tunnel: no account, no domain, nothing to set up;
+                                    the address stays across restarts of DevMate and changes after
+                                    devmate stop, a restart of the computer, or --new-address and
+                                    then devmate restart
   devmate connect cloudflare --url https://<host>/mcp --executable <cloudflared> [--auth oauth]
   devmate connect openai-tunnel --tunnel-id <tunnel_…> [--organization <org-…>]
                                     OpenAI's own tunnel, for ChatGPT: outbound only, no public address, an id
@@ -95,7 +103,7 @@ Options: --instance <directory> selects another runtime instance, --timeout <ms>
 
 const VALUE_OPTIONS = new Set(['instance', 'port', 'timeout', 'json', 'file', 'executable', 'name', 'url', 'tunnel-id', 'openai-tunnel', 'organization', 'auth', 'lines',
   'host', 'user', 'domain', 'ssh-port', 'identity']);
-const FLAG_OPTIONS = new Set(['stdin', 'help', 'open', 'read-only', 'version', 'report', 'any-address']);
+const FLAG_OPTIONS = new Set(['stdin', 'help', 'open', 'read-only', 'version', 'report', 'any-address', 'new-address']);
 
 export function parseCli(argv) {
   const positional = [];
@@ -234,6 +242,17 @@ async function offlineDoctor(instanceRoot) {
 
 async function configureConnection(kind, options, instanceRoot) {
   const { readConfig, saveConfig, publicMcpUrl } = await import('./config.mjs');
+  // A new address for the quick tunnel there is, and nothing else: the connection stays as it is saved (the cloudflared
+  // it names, OpenAI's tunnel beside it). Only its key goes, and with it the tunnel kept for that key.
+  if (kind === 'quick' && options['new-address'] && readConfig(instanceRoot).connection.kind === 'cloudflare-quick' &&
+    ['executable', 'openai-tunnel', 'organization', 'auth', 'url', 'host', 'user', 'tunnel-id', 'ssh-port', 'identity', 'domain', 'any-address'].every(name => options[name] === undefined)) {
+    (await import('./cloudflare-connection.mjs')).forgetQuickTunnelKey(instanceRoot);
+    return { renewed: true, next: ['Apply it: devmate restart (the quick tunnel starts anew: another host name and another key; the old address leads nowhere)', 'Then give your client the new address: devmate mcp-url'] };
+  }
+  // A new address is asked for the quick tunnel there is. Asked where there is none, it would have set one up in place
+  // of the connection there is (an OpenAI tunnel, a tunnel on the owner's domain) and dropped its sign-in.
+  if (kind === 'quick' && options['new-address'] && readConfig(instanceRoot).connection.kind !== 'cloudflare-quick')
+    throw new Error('There is no quick tunnel address to renew: this DevMate connects by ' + readConfig(instanceRoot).connection.kind + ', and that stays as it is. To use a quick tunnel instead: devmate connect quick');
   const need = name => { if (!options[name]) throw new Error('connect ' + kind + ' needs --' + name); return options[name]; };
   const executable = () => path.resolve(need('executable'));
   // The quick tunnel needs nothing but cloudflared, which is looked for when it is not named.
@@ -245,6 +264,13 @@ async function configureConnection(kind, options, instanceRoot) {
   // beside: the connection there is stays as it is and is not named again (the address of a relay is nothing its owner
   // ever typed); only OpenAI's tunnel beside it is added, changed or taken away.
   const staying = kind === 'beside', stays = staying ? readConfig(instanceRoot) : null;
+  // What names a connection and says nothing for this kind is not passed over in silence: a command that was accepted
+  // would be taken to have done what it said. (Said first: before cloudflared is looked for, say.)
+  const NAMING = ['url', 'host', 'user', 'executable', 'tunnel-id', 'ssh-port', 'identity', 'domain', 'any-address', 'new-address'];
+  const TAKES = { local: [], quick: ['executable', 'new-address'], cloudflare: ['url', 'executable'], 'openai-tunnel': ['tunnel-id', 'executable'], https: ['url'], ssh: ['url', 'executable', 'host', 'user', 'ssh-port', 'identity'], beside: [] };
+  const takes = TAKES[kind] || [], stray = NAMING.filter(name => options[name] !== undefined && !takes.includes(name));
+  if (stray.length && !staying && kind in TAKES) throw new Error('connect ' + kind + ' does not take ' + stray.map(name => '--' + name).join(', ') + (takes.length ? ': of the options that name a connection it takes ' + takes.map(name => '--' + name).join(', ') : ': it takes no option that names a connection') +
+    (stray.some(name => ['domain', 'any-address'].includes(name)) ? '. --domain and --any-address belong to a relay: devmate relay setup <user@host>' : '') + '.');
   const connection = staying ? stays.connection : kind === 'local' ? { kind: 'local' }
     : kind === 'quick' ? { kind: 'cloudflare-quick', executable: cloudflared() }
     : kind === 'cloudflare' ? { kind, publicUrl: need('url'), executable: executable() }
@@ -256,13 +282,6 @@ async function configureConnection(kind, options, instanceRoot) {
       ...(options['ssh-port'] ? { sshPort: Number(options['ssh-port']) } : {}), ...(options.identity ? { identityFile: path.resolve(options.identity) } : {}) }
     : null;
   if (!connection) throw new Error('Choose one of: connect local, quick, cloudflare, openai-tunnel, https, ssh, beside');
-  // What names a connection and says nothing for this kind is not passed over in silence: a command that was accepted
-  // would be taken to have done what it said.
-  const NAMING = ['url', 'host', 'user', 'executable', 'tunnel-id', 'ssh-port', 'identity', 'domain', 'any-address'];
-  const takes = { local: [], quick: ['executable'], cloudflare: ['url', 'executable'], 'openai-tunnel': ['tunnel-id', 'executable'], https: ['url'], ssh: ['url', 'executable', 'host', 'user', 'ssh-port', 'identity'], beside: [] }[kind];
-  const stray = NAMING.filter(name => options[name] !== undefined && !takes.includes(name));
-  if (stray.length && !staying) throw new Error('connect ' + kind + ' does not take ' + stray.map(name => '--' + name).join(', ') + (takes.length ? ': of the options that name a connection it takes ' + takes.map(name => '--' + name).join(', ') : ': it takes no option that names a connection') +
-    (stray.some(name => ['domain', 'any-address'].includes(name)) ? '. --domain and --any-address belong to a relay: devmate relay setup <user@host>' : '') + '.');
   if (options.auth && !['none', 'oauth'].includes(options.auth)) throw new Error('--auth is none or oauth');
   // OpenAI's tunnel beside a connection that has an address. With no such connection the tunnel is the connection.
   const beside = options['openai-tunnel'] === 'none' ? null : options['openai-tunnel'];
@@ -298,6 +317,9 @@ async function configureConnection(kind, options, instanceRoot) {
     next.auth = { mode: 'oauth', issuer: new URL(url).origin, ...(current.auth.mode === 'oauth' && current.auth.clients ? { clients: current.auth.clients } : {}) };
   } else if (options.auth === 'none' || !url || (current.auth.mode === 'oauth' && current.auth.issuer !== new URL(url).origin)) next.auth = { mode: 'none' };
   const saved = saveConfig(instanceRoot, next);
+  // A new address for a quick tunnel: its key goes, and the tunnel kept for it is not taken back at the next start
+  // (another host name, another key: an address that got out leads nowhere any more).
+  if (kind === 'quick' && options['new-address']) (await import('./cloudflare-connection.mjs')).forgetQuickTunnelKey(instanceRoot);
   // The connection that stays keeps its credential: only the tunnel's is spoken of.
   const credential = staying ? null : saved.connection.tokenEnv || saved.connection.runtimeKeyEnv || null, tunnelKey = saved.openaiTunnel?.runtimeKeyEnv || null;
   // Which tunnel a stored key was made for cannot be seen from here. What is said holds either way: one that is
@@ -326,7 +348,7 @@ async function configureConnection(kind, options, instanceRoot) {
     'If it was set up with --any-address, add that: without it the relay answers only ChatGPT, Claude and this computer.', 'To take the relay off that server:', '  devmate relay remove ' + relay + reach] } : {}),
     saved: { connection: staying ? { kind: saved.connection.kind, ...(saved.connection.relay ? { relay: true } : {}) } : saved.connection, auth: saved.auth, ...(saved.openaiTunnel ? { openaiTunnel: saved.openaiTunnel } : {}) }, credential,
     next: [store(credential, 'the credential', 'the credential of another tunnel'), store(tunnelKey, 'the runtime key of the tunnel', 'the runtime key of another tunnel'), 'Apply it: devmate restart', 'Then check: devmate doctor',
-      saved.connection.kind === 'cloudflare-quick' ? 'The address for your client: devmate mcp-url (it changes each time DevMate or the tunnel starts again)' : null,
+      saved.connection.kind === 'cloudflare-quick' ? 'The address for your client: devmate mcp-url (it stays across restarts and updates of DevMate; it changes after devmate stop, a restart of the computer, or devmate connect quick --new-address and then devmate restart)' : null,
       // Sign-in is asked where a sign-in page can be reached: at the address. Nothing asks for it on the tunnel's way.
       saved.openaiTunnel && saved.auth.mode === 'oauth' ? 'Sign-in is asked at the address only. What comes through OpenAI\'s tunnel is taken as yours without it: who may use the tunnel is decided in the OpenAI account it belongs to.' : null,
       lost && saved.connection.kind !== 'local' ? lost + 'To run it beside this connection: devmate connect beside --openai-tunnel ' + before.tunnelId + (before.organizationId ? ' --organization ' + before.organizationId : '')
@@ -403,7 +425,7 @@ export async function main(argv = process.argv.slice(2), {
     if (command === 'restart') {
       // A port the owner chose for the runtime stays its port: one that is not named again is the one that ran.
       const before = options.port ? null : await status(runtimeOptions).catch(() => null);
-      await stop(runtimeOptions);
+      await stop({ ...runtimeOptions, again: true });
       print(await launch({ ...runtimeOptions, ...(before?.running && Number.isInteger(before.record?.port) ? { port: before.record.port } : {}) }));
       return 0;
     }
@@ -440,6 +462,24 @@ export async function main(argv = process.argv.slice(2), {
     if (command === 'logs') {
       const lines = runtimeLogTail(instanceRoot, { bytes: 64000 }).split(/\r?\n/);
       stdout.write(lines.slice(-Math.max(1, Number(options.lines) || 40)).join('\n') + '\n');
+      return 0;
+    }
+    if (command === 'client') {
+      const action = positional[0] || 'status', which = positional[1];
+      if (!['add', 'remove', 'status'].includes(action)) throw new Error('Use client add <claude-code|codex|claude-desktop>, client remove <…>, or client alone to see where DevMate is added');
+      // What a client on this computer starts is set at this computer, by its owner.
+      if (viaClient && action !== 'status') throw new Error('devmate client ' + action + ' is run by the owner in their own terminal, not through a connected client');
+      const { createClientRegistration } = await import('./platform/client-registration.mjs');
+      // (The home of the environment it was given, as the clients themselves take it.)
+      const registration = createClientRegistration({ instanceRoot, cli: fileURLToPath(import.meta.url), env, home: (process.platform === 'win32' ? env.USERPROFILE : env.HOME) || undefined });
+      if (action === 'status') { print(registration.status()); return 0; }
+      if (!which) throw new Error('Name the client: devmate client ' + action + ' claude-code | codex | claude-desktop');
+      const done = action === 'add' ? registration.add(which) : registration.remove(which);
+      const app = { 'claude-code': 'Claude Code', codex: 'Codex', 'claude-desktop': 'Claude Desktop' }[which];
+      print({ ...done, next: [action === 'add' ? 'Start a new ' + app + ' session (Claude Desktop: quit it and open it again): it reads its settings when it starts, and DevMate is then one of its MCP servers, named devmate.'
+        : done.removed ? 'Start a new ' + app + ' session: DevMate is no longer one of its servers.'
+          : done.elsewhere ? 'The entry named devmate in ' + app + '\'s settings is not one this DevMate added (it was written by hand, or for another DevMate instance): it was left as it is.' : 'DevMate was not added to ' + app + '.',
+      action === 'add' ? 'DevMate starts by itself when the client needs it; check with: devmate client' : null].filter(Boolean) });
       return 0;
     }
     if (command === 'chrome') {
@@ -574,7 +614,7 @@ export async function main(argv = process.argv.slice(2), {
       const chosen = profile ? await client.call('access.update', { profile }, callOptions) : await client.call('access.read', {}, callOptions);
       stdout.write(chosen.profile + '\n');
       stderr.write(chosen.profile === 'full'
-        ? 'Full access: a client connected as the owner can share folders, read credential files, set up engines and answer agents; what a delegated agent asks permission for is granted automatically. Back to the default: devmate access guarded\n'
+        ? 'Full access: a client connected as the owner can share folders, read credential files, set up engines, answer agents and, on Windows, read the windows on your screen; what a delegated agent asks permission for is granted automatically. Back to the default: devmate access guarded\n'
         : 'Guarded: you share folders, lift credential-file protection and answer agents at this computer. To hand all of that to your connected client: devmate access full\n');
       return 0;
     }
@@ -609,7 +649,7 @@ export async function main(argv = process.argv.slice(2), {
       }
       stdout.write((remote || local) + '\n');
       stderr.write(connection.tunnelId ? 'In ChatGPT choose the Tunnel connection type and enter this tunnel ID. Clients on this computer use ' + local + '\n'
-        : remote ? (connection.temporaryAddress ? 'This address ends in the key of this start: give it to your own client only. ' : '') +
+        : remote ? (connection.temporaryAddress ? 'This address ends in a key that stays until you ask for a new address (devmate connect quick --new-address): give it to your own client only. ' : '') +
             (connection.remoteMcpVerified === false ? 'It has not been checked end to end yet (devmate doctor). ' : '') +
             // The address serves every client; the tunnel beside it serves ChatGPT of the account it belongs to.
             (connection.openaiTunnel?.tunnelId ? 'ChatGPT of the account the tunnel belongs to can use the Tunnel connection type instead, with the tunnel ID ' + connection.openaiTunnel.tunnelId + '. ' : '') +

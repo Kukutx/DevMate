@@ -26,12 +26,14 @@ export function defineAgentOperations(service, add) {
   const waiting = result => [result.approvals.length ? result.approvals.length + ' approval(s)' : null, result.inputs.length ? result.inputs.length + ' question(s)' : null].filter(Boolean).join(' and ');
   const follow = result => 'call agents_result agentId:' + result.agentId + (result.jobId ? ' jobId:' + result.jobId : result.deliveryId ? ' deliveryId:' + result.deliveryId : '') + ' to wait for this task';
   const unasked = result => result.approvals.find(item => item.delegation)?.waits;
-  const turnText = result => (result.output ||(result.error ? '[' + result.error.message + ']' : result.settled ? '[the agent produced no text]' : '[no result yet]')) +
+  // What the agent wrote and which files it changed are given as they are; the rest is DevMate's own words (own).
+  const turnText = (result, own = text => text) => (result.output ||(result.error ? '[' + result.error.message + ']' : result.settled ? '[the agent produced no text]' : '[no result yet]')) +
     (result.outputTruncated ? '\n[earlier output omitted; job.read id:' + result.jobId + ' has all of it]' : '') +
     (result.changedFiles?.length ? '\nWorking tree after this task (git status):\n' + result.changedFiles.map(entry => '  ' + entry).join('\n') : '') +
     (result.proposedFiles ? '\nThe agent worked in a copy of its own: the project is unchanged.' + (result.proposedFiles.length ? ' It proposes:\n' + result.proposedFiles.map(entry => '  ' + entry).join('\n') : ' It proposes no changes.') +
-      '\nRead the diff with operations_query {operation:"agents.proposal", input:{agentId:"' + result.agentId + '"}}. Bring it into the project with operations_call {operation:"agents.apply", input:{agentId:"' + result.agentId + '"}}, or drop it with agents.discard.' : '') +
-    (result.copyNote ? '\n[' + result.copyNote + ']' : '') +
+      '\n' + own('Read the diff with operations_query {operation:"agents.proposal", input:{agentId:"' + result.agentId + '"}}. Bring it into the project with operations_call {operation:"agents.apply", input:{agentId:"' + result.agentId + '"}}, or drop it with agents.discard.') : '') +
+    (result.copyNote ? '\n[' + own(result.copyNote) + ']' : '') + own(turnStatus(result));
+  const turnStatus = result =>
     // An agent that a connected client had written down, and that no allowed task has started yet, is said as that.
     // Where the owner chose not to be asked, a task that still waits does so for something else (unasked), and
     // that is said instead of what the owner has long done.

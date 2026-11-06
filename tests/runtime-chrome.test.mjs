@@ -10,8 +10,9 @@ import { BROWSER_CAPABILITIES, BROWSER_TEXT, EXTENSION_ORIGIN, NATIVE_HOST, crea
 import { PassThrough } from 'node:stream';
 import { frame, frames, serveChromeHost } from '../runtime/chrome-host.mjs';
 import { createChromeRegistration } from '../runtime/platform/chrome-registration.mjs';
-import { READ_ONLY, createCapabilities } from '../chrome-extension/capabilities.js';
+import { READ_ONLY, RUN_STEPS, createCapabilities } from '../chrome-extension/capabilities.js';
 import { startRuntime } from '../runtime/main.mjs';
+import { DevMateService } from '../runtime/service.mjs';
 import { main as cli } from '../runtime/cli.mjs';
 
 const owner = { id: 'owner', surface: 'local' }, connected = { id: 'owner' };
@@ -23,6 +24,7 @@ test('the runtime offers exactly what the extension can do, each as a read or as
   assert.deepEqual(BROWSER_CAPABILITIES.map(item => item.method).sort(), extension);
   assert.deepEqual(BROWSER_CAPABILITIES.filter(item => item.readOnly).map(item => item.method).sort(), [...READ_ONLY].sort());
   assert.ok(BROWSER_CAPABILITIES.every(item => item.name === 'chrome.' + item.method && item.description.length > 8 && item.description.length < 400));
+  assert.deepEqual(BROWSER_CAPABILITIES.find(item => item.method === 'page.run').schema.shape.steps.element.shape.method.options, [...RUN_STEPS], 'a step of a run may be the same methods here and there');
   // The extension is the one of the fixed key in its manifest, and the host is registered for that one alone.
   const manifest = JSON.parse(fs.readFileSync(new URL('../chrome-extension/manifest.json', import.meta.url), 'utf8'));
   assert.equal(EXTENSION_ORIGIN, 'chrome-extension://cbogglgkdnlbglhiljblbnhngmbeiomm/'); assert.ok(manifest.permissions.includes('nativeMessaging')); assert.equal(NATIVE_HOST, 'io.github.kukutx.devmate');
@@ -265,6 +267,11 @@ test('what a developer debugs a page with: answers read as lines, a wait that is
   const elements = link.call({ capability: 'chrome.page.snapshot', input: { interactiveOnly: true } }, { readOnly: true });
   await answering({ tabId: 7, title: 'App', url: 'https://x.test/', text: '[12] button "Save"\n[15] textbox "Name" value="Ann"', nodes: 2, untrusted: true });
   assert.equal((await elements)[BROWSER_TEXT], '[12] button "Save"\n[15] textbox "Name" value="Ann"\n{"tabId":7,"title":"App","url":"https://x.test/","nodes":2,"untrusted":true}');
+  // A run reads as its steps one under the other, each as it reads alone, up to the one that failed.
+  const run = link.call({ capability: 'chrome.page.run', input: { steps: [{ method: 'page.click', input: { ref: 12 } }, { method: 'page.snapshot' }, { method: 'page.press', input: { key: 'Enter' } }] } });
+  await answering({ tabId: 7, steps: [{ method: 'page.click', ok: true, result: { tabId: 7, clicked: { x: 1, y: 2 } } }, { method: 'page.snapshot', ok: true, result: { tabId: 7, text: '[15] textbox "Name"', nodes: 1 } },
+    { method: 'page.press', ok: false, error: { code: 'dialog_open', message: 'The page is showing a dialog.' } }], failed: 3, notDone: 0, untrusted: true });
+  assert.equal((await run)[BROWSER_TEXT], '# 1 page.click\n{"tabId":7,"clicked":{"x":1,"y":2}}\n# 2 page.snapshot\n[15] textbox "Name"\n{"tabId":7,"nodes":1}\n# 3 page.press failed (dialog_open): The page is showing a dialog.\n{"tabId":7,"failed":3,"notDone":0,"untrusted":true}');
   // A picture of a whole page stays a picture, and says how large it is.
   const whole = link.call({ capability: 'chrome.page.screenshot', input: { fullPage: true } }, { readOnly: true });
   await answering({ tabId: 7, mimeType: 'image/png', base64: 'aGk=', fullPage: true, width: 1280, height: 4000 });
@@ -837,7 +844,7 @@ test('the browser host is the link, end to end: started as a browser starts it, 
   const projectRoot = path.join(temp, 'project'); fs.mkdirSync(projectRoot);
   await runtime.service.call('project.create', { root: projectRoot }, owner);
   const everything = await runtime.service.call('capability.list', { summary: true }, connected);
-  assert.deepEqual(everything.engines.at(-1).id, 'chrome'); assert.ok(everything.engines.length > 3);
+  assert.deepEqual(everything.engines.slice(-2).map(engine => engine.id), ['chrome', 'desktop']); assert.ok(everything.engines.length > 4);
   // The browser closes: the host ends, the runtime is told and keeps running.
   host.stdin.end();
   assert.equal(await new Promise(resolve => host.once('exit', resolve)), 0);
@@ -865,7 +872,7 @@ test('with several browsers connected and none answered yet, a call that names a
   await new Promise(resolve => setTimeout(resolve, 100));
   const refused = await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }).then(() => null, failure => failure);
   assert.deepEqual([refused?.code, refused?.notStarted], ['browser_changed', true]);
-  assert.match(refused.message, /^DevMate does not know which browser answered this caller/);
+  assert.match(refused.message, /^DevMate does not know which browser this caller's ids are from \(no call of this caller's has succeeded since DevMate started, or DevMate let that go to keep its list short\), and chrome\.tabs\.close names/);
   assert.match(refused.message, /Ask the browser that is used now what it has \(tabs\.list, bookmarks\.tree\), then call again\.$/);
   // A look that names nothing is answered, and from then on the ids are those of the browser that answered it.
   const answeredBy = (await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true })).by;
@@ -924,7 +931,7 @@ test('the browser whose ids a caller holds is kept for each caller: another clie
   // X's call with a tab id of B's is not passed on to A, whatever Y did; Y's is.
   const refused = await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }, { caller: 'X' }).then(() => null, failure => failure);
   assert.deepEqual([refused?.code, refused?.notStarted], ['browser_changed', true]);
-  assert.match(refused.message, /^DevMate uses another browser now than the one that answered before/);
+  assert.match(refused.message, /^The browser DevMate uses now is not the connection that answered this caller before \(the owner paused that one or chose another, a browser came or went, or the same browser connected anew, as after its extension was reloaded\), and chrome\.tabs\.close names/);
   assert.deepEqual(await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [5] } }, { caller: 'Y' }), { by: a });
   link.close();
 });
@@ -940,9 +947,88 @@ test('once a caller\'s browser was let go to keep the list short, a caller with 
   // 'first' was let go: its ids may be another browser's from before, so they are not passed on until it looks.
   const refused = await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }, { caller: 'first' }).then(() => null, failure => failure);
   assert.deepEqual([refused?.code, refused?.notStarted], ['browser_changed', true]);
-  assert.match(refused.message, /^DevMate does not know which browser answered this caller \(it was started again since, and which browser is used was decided anew, or it let that go to keep its list short\)/);
+  assert.match(refused.message, /^DevMate does not know which browser this caller's ids are from \(no call of this caller's has succeeded since DevMate started, or DevMate let that go to keep its list short\), and chrome\.tabs\.close names/);
   assert.doesNotMatch(refused.message, /Several browsers/, 'one browser is connected');
   await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true, caller: 'first' });
   assert.deepEqual(await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }, { caller: 'first' }), { by: only });
+  // A caller that comes only now may be one that was let go: it too looks first, and is told the same.
+  const newcomer = await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }, { caller: 'newcomer' }).then(() => null, failure => failure);
+  assert.deepEqual([newcomer?.code, newcomer?.notStarted], ['browser_changed', true]);
+  assert.match(newcomer.message, /^DevMate does not know which browser this caller's ids are from \(no call of this caller's has succeeded since DevMate started, or DevMate let that go to keep its list short\), and chrome\.tabs\.close names/);
+  await link.call({ capability: 'chrome.tabs.list' }, { readOnly: true, caller: 'newcomer' });
+  assert.deepEqual(await link.call({ capability: 'chrome.tabs.close', input: { tabIds: [1] } }, { caller: 'newcomer' }), { by: only });
   link.close();
+});
+
+test('a run of page methods is held step by step to what each method takes alone, names its tab once, and names ids where a step does', async () => {
+  const link = createBrowserLink({ callTimeoutMs: 2000 }), methods = ['tabs.list', 'page.read', 'page.run'], given = [];
+  const serve = linkId => { void (async () => { for (;;) { let work; try { work = await link.next({ linkId, waitMs: 300 }); } catch { return; }
+    for (const call of work.calls) { given.push(call.params); link.result({ linkId, id: call.id, ok: true, result: { by: linkId } }); } } })(); };
+  const first = link.attach({ browser: 'Google Chrome', extension: '4.0.7', methods }).linkId; serve(first);
+  const run = (steps, options) => link.call({ capability: 'chrome.page.run', input: { tabId: 4, steps } }, options);
+  const steps = [{ method: 'page.waitFor', input: { text: 'Saved', timeoutMs: 500 } }, { method: 'page.click', input: { ref: 13 } }, { method: 'page.press', input: { key: 'Enter' } }];
+  assert.deepEqual(await run(steps), { by: first });
+  // The extension is told how long the run is waited for: the time of its steps, less a margin.
+  assert.deepEqual(given.at(-1), { tabId: 4, steps, withinMs: 85000 });
+  // A step without input is passed on with an empty one.
+  await run([{ method: 'page.read' }]);
+  assert.deepEqual(given.at(-1), { tabId: 4, steps: [{ method: 'page.read', input: {} }], withinMs: 25000 });
+  // Whatever a step's own method would refuse, the run refuses, before the browser hears of it.
+  const count = given.length, refused = async (wrong, message) => {
+    const failure = await run(wrong).then(() => null, error => error);
+    assert.deepEqual([failure?.code, failure?.notStarted], ['invalid_input', true]); assert.match(failure.message, message);
+  };
+  await refused([{ method: 'page.click', input: { tabId: 5, ref: 13 } }], /^Invalid input for chrome\.page\.run: steps\.0\.input: a run works on one tab\. Give its tabId once, for the run\.$/);
+  await refused([{ method: 'page.read' }, { method: 'page.click', input: { ref: 0 } }], /^Invalid input for chrome\.page\.run, step 2 \(page\.click\): ref: /);
+  await refused([{ method: 'page.press', input: { key: 'F13' } }], /, step 1 \(page\.press\): key: /);
+  await refused([{ method: 'page.click', input: { ref: 13, pointer: true } }], /, step 1 \(page\.click\): .*pointer/);
+  for (const wrong of [[{ method: 'page.storage' }], [{ method: 'page.screenshot' }], [{ method: 'page.read', extra: 1 }], [], Array(31).fill({ method: 'page.read' })]) await refused(wrong, /^Invalid input for chrome\.page\.run: steps/);
+  assert.equal(given.length, count);
+  // The steps are checked with the rest of the input: also where no browser is there to ask.
+  const none = createBrowserLink();
+  await assert.rejects(none.call({ capability: 'chrome.page.run', input: { steps: [{ method: 'page.click', input: { ref: 0 } }] } }), { code: 'invalid_input' });
+  none.close();
+  // A run is a change: it is not called as a read.
+  await assert.rejects(run([{ method: 'page.read' }], { readOnly: true }), { code: 'forbidden' });
+  // An id in a step is an id: with two browsers and nothing of this caller's answered, a run that names one is not
+  // passed on, and one that names none is.
+  const second = link.attach({ browser: 'Microsoft Edge', extension: '4.0.7', methods }).linkId; serve(second);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const unsure = await link.call({ capability: 'chrome.page.run', input: { steps: [{ method: 'page.click', input: { ref: 13 } }] } }, { caller: 'new' }).then(() => null, error => error);
+  assert.deepEqual([unsure?.code, unsure?.notStarted], ['browser_changed', true]);
+  assert.deepEqual(await link.call({ capability: 'chrome.page.run', input: { steps: [{ method: 'page.read' }] } }, { caller: 'new' }), { by: second });
+  // A run is given the time of its steps: each at least that of a call, a wait its own, and five minutes in all at most.
+  const definition = BROWSER_CAPABILITIES.find(item => item.name === 'chrome.page.run');
+  assert.equal(definition.waitMs({ steps: [{ method: 'page.waitFor', input: { timeoutMs: 30000 } }, { method: 'page.click' }] }), 70000);
+  assert.equal(definition.waitMs({ steps: Array(30).fill({ method: 'page.waitFor', input: { timeoutMs: 30000 } }) }), 300000);
+  link.close();
+});
+
+test('page.upload hands the browser files of the project of the call, read by the rules for reading them, and never a path the caller wrote', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-upload-')), app = path.join(temp, 'app');
+  fs.mkdirSync(path.join(app, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(app, 'docs', 'report.pdf'), 'pdf'); fs.writeFileSync(path.join(app, '.env'), 'TOKEN=1'); fs.writeFileSync(path.join(temp, 'outside.txt'), 'x');
+  const service = new DevMateService({ instanceRoot: path.join(temp, 'instance'), endpoint: '' });
+  t.after(async () => { await service.close(); fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  await service.ready;
+  const project = await service.call('project.create', { root: app, name: 'app' }, owner), given = [];
+  const { linkId } = service.browser.attach({ browser: 'Google Chrome', extension: '4.0.7', methods: ['tabs.list', 'page.upload'] });
+  void (async () => { for (;;) { let work; try { work = await service.browser.next({ linkId, waitMs: 300 }); } catch { return; }
+    for (const call of work.calls) { given.push(call.params); service.browser.result({ linkId, id: call.id, ok: true, result: { uploaded: call.params.files.length } }); } } })();
+  const upload = (input, projectId = project.id) => service.call('capability.call', { capability: 'chrome.page.upload', ...(projectId ? { projectId } : {}), input }, connected);
+  assert.deepEqual(await upload({ ref: 7, files: ['docs/report.pdf'] }), { uploaded: 1 });
+  assert.deepEqual(given, [{ ref: 7, files: [fs.realpathSync.native(path.join(app, 'docs', 'report.pdf'))] }]);
+  // What could not be read is not handed over: a credential file of a project that keeps them out, a path out of the
+  // project, a folder, a file that is not there, and files without a project.
+  await assert.rejects(upload({ ref: 7, files: ['.env'] }), { code: 'protected_workspace_path' });
+  await assert.rejects(upload({ ref: 7, files: ['../outside.txt'] }), error => ['outside_project', 'invalid_path', 'unsafe_path'].includes(error.code));
+  await assert.rejects(upload({ ref: 7, files: [path.join(temp, 'outside.txt')] }), error => ['outside_project', 'invalid_path', 'unsafe_path'].includes(error.code));
+  await assert.rejects(upload({ ref: 7, files: ['docs'] }), { code: 'invalid_input', message: /^Only files go into a page, and docs is a folder\.$/ });
+  await assert.rejects(upload({ ref: 7, files: ['docs/none.pdf'] }), { code: 'not_found' });
+  await assert.rejects(upload({ ref: 7, files: ['docs/report.pdf'] }, null), { code: 'invalid_input', message: /^chrome\.page\.upload takes files of a project: give projectId, and the files by their paths in it\.$/ });
+  assert.equal(given.length, 1);
+  // The link itself takes no paths but those the project gave, whatever the input says.
+  await assert.rejects(service.browser.call({ capability: 'chrome.page.upload', input: { ref: 7, files: ['C:/Windows/win.ini'] } }), { code: 'invalid_input', notStarted: true });
+  await assert.rejects(service.browser.call({ capability: 'chrome.page.upload', input: { ref: 7, files: ['a', 'b'] } }, { files: ['/x'] }), { code: 'invalid_input' });
+  assert.equal(given.length, 1);
 });

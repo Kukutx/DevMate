@@ -10,6 +10,7 @@ import { startRuntime } from '../runtime/main.mjs';
 import { verifyPublicMcp } from '../runtime/connection-verify.mjs';
 import { createConnection, normalizeConnectionConfig } from '../runtime/connection.mjs';
 import { normalizeConfig } from '../runtime/config.mjs';
+import { forgetQuickTunnelKey, quickTunnelKey } from '../runtime/cloudflare-connection.mjs';
 
 const fakeConnection = kind => () => ({ async start() {}, async stop() {}, status() { return { kind, phase: 'fixture', remoteMcpVerified: false }; } });
 function request(port, pathname, { method = 'GET', headers = {}, body } = {}) {
@@ -163,49 +164,275 @@ test('cloudflare connection keeps the token out of arguments, reports edge regis
   assert.equal(stopped.phase, 'stopped'); assert.equal(stopped.retryScheduled, false, 'an explicit stop cancels the pending restart');
 });
 
-test('a quick tunnel needs no credential, takes the address it is given and loses it with the connector', async t => {
+// A cloudflared as a quick tunnel's connector is seen from the runtime: a process, and its metrics server (the address
+// it was given, how many connections to Cloudflare it holds). given: the host name it holds; ready: its connections.
+function quickFixture() {
+  // events: what was done to connectors, in order ('reap' of one written down, 'spawn' of a new one).
+  const spawned = [], events = [], cloudflared = { given: null, ready: 0, answers: true };
+  const spawnImpl = (file, args, options) => {
+    const child = new EventEmitter(); child.pid = 5151 + spawned.length; child.exitCode = null; child.signalCode = null; child.unref = () => { child.unrefd = true; };
+    spawned.push({ file, args, options, child }); events.push('spawn'); queueMicrotask(() => child.emit('spawn'));
+    return child;
+  };
+  const terminated = [];
+  const terminateImpl = async child => { terminated.push(child.pid); child.exitCode = 0; child.emit('exit', 0, null); return { exitConfirmed: true }; };
+  // What it was given, it also says in its log, as the real one does ("Your quick Tunnel has been created!").
+  const fetchImpl = async address => {
+    if (!cloudflared.answers) throw new Error('connection refused');
+    const args = spawned.at(-1)?.args || [], logfile = args.includes('--logfile') ? args[args.indexOf('--logfile') + 1] : null;
+    if (address.endsWith('/quicktunnel') && cloudflared.given && cloudflared.logs !== false && logfile && !(fs.existsSync(logfile) && fs.readFileSync(logfile, 'utf8').includes(cloudflared.given)))
+      fs.appendFileSync(logfile, 'INF |  https://' + cloudflared.given + '  |\n');
+    const body = address.endsWith('/quicktunnel') ? { hostname: cloudflared.given || '' } : { status: cloudflared.ready ? 200 : 503, readyConnections: cloudflared.ready };
+    return { ok: !address.endsWith('/ready') || cloudflared.ready > 0, json: async () => body };
+  };
+  // The record of a kept connector, as ownedProcess keeps it in a file: here in memory, with a process that is alive
+  // for as long as `alive` says. refused: the system does not say who the process is, and nothing is written.
+  const kept = { record: null, alive: true, reaped: 0, refused: false };
+  const owned = {
+    async remember(pid, about = {}, still = () => true) { if (kept.refused || !still()) return false; kept.record = { ...about, pid, identity: 'cloudflared|' + pid }; return true; },
+    async adopt(fits = () => true) { return kept.record && kept.alive && fits(kept.record) ? kept.record : null; },
+    amend(pid, fields) { if (kept.record?.pid !== pid) return false; kept.record = { ...kept.record, ...fields }; kept.amended = (kept.amended || 0) + 1; return true; },
+    async reap() { if (kept.record) { kept.reaped++; events.push('reap'); } kept.record = null; return { reaped: true }; },
+    forget() { kept.record = null; }
+  };
+  return { spawned, events, cloudflared, spawnImpl, terminateImpl, terminated, fetchImpl, kept, owned };
+}
+const until = async (check, what, ms = 3000) => { for (const end = Date.now() + ms; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 20))) if (await check()) return; throw new Error('Timed out waiting for ' + what); };
+
+test('a quick tunnel needs no credential, takes the address it is given, and its connector is a process of its own that a restart leaves running', async t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const config = { kind: 'cloudflare-quick', executable: process.execPath };
   assert.deepEqual(normalizeConnectionConfig(config), config);
   assert.throws(() => normalizeConnectionConfig({ ...config, publicUrl: 'https://x.example/mcp' }), { code: 'invalid_connection' });
   assert.throws(() => normalizeConnectionConfig({ ...config, executable: 'cloudflared' }), { code: 'invalid_executable' });
-  // Nobody can sign in at an address that is new with every start.
+  // Nobody can sign in at an address that changes when cloudflared starts again.
   assert.throws(() => normalizeConfig({ connection: config, auth: { mode: 'oauth', issuer: 'https://x.example' } }), { code: 'invalid_issuer' });
   assert.equal(normalizeConfig({ connection: config }).auth.mode, 'none');
-  const spawned = [];
-  const spawnImpl = (file, args, options) => {
-    const child = new EventEmitter(); child.pid = 5151 + spawned.length; child.exitCode = null; child.signalCode = null; child.stderr = new EventEmitter();
-    spawned.push({ file, args, options, child }); queueMicrotask(() => child.emit('spawn'));
-    return child;
-  };
-  const terminateImpl = async child => { child.exitCode = 0; child.emit('exit', 0, null); return { exitConfirmed: true }; };
-  const connection = createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x', GITHUB_TOKEN: 'unrelated' }, spawnImpl, terminateImpl,
-    fetchImpl: async () => { throw new Error('unreachable'); } });
+  const { spawned, cloudflared, spawnImpl, terminateImpl, terminated, fetchImpl, kept, owned } = quickFixture();
+  const connect = () => createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x', GITHUB_TOKEN: 'unrelated' }, spawnImpl, terminateImpl, fetchImpl, owned, pickPort: async () => 47011 });
+  const connection = connect();
   const started = await connection.start();
   assert.equal(started.phase, 'connecting'); assert.equal(started.publicUrl, undefined); assert.equal(started.temporaryAddress, true); assert.equal(connection.publicUrl(), null);
-  // It is told where to forward to, and carries no token and nothing else of the runtime's: the key is never on its command line.
-  assert.deepEqual(spawned[0].args, ['tunnel', '--no-autoupdate', '--metrics', '127.0.0.1:0', '--url', 'http://127.0.0.1:8789']);
+  // It is told where to forward to, where its metrics are and where it writes its log, and carries no token and
+  // nothing else of the runtime's: the key is never on its command line.
+  assert.deepEqual(spawned[0].args, ['tunnel', '--no-autoupdate', '--metrics', '127.0.0.1:47011', '--logfile', path.join(temp, 'quick-tunnel.log'), '--url', 'http://127.0.0.1:8789']);
   assert.equal(spawned[0].options.env.TUNNEL_TOKEN, undefined); assert.equal(spawned[0].options.env.GITHUB_TOKEN, undefined); assert.equal(spawned[0].options.shell, false);
-  spawned[0].child.stderr.emit('data', 'INF |  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):  |\nINF |  https://calm-river-quick-fixture.trycloudflare.com  |\n');
-  spawned[0].child.stderr.emit('data', 'INF Registered tunnel connection connIndex=0\n');
+  // A process of its own, holding nothing of the runtime's open, with no window: it outlives the runtime.
+  assert.deepEqual([spawned[0].options.detached, spawned[0].options.stdio, spawned[0].options.windowsHide, spawned[0].child.unrefd], [true, 'ignore', true, true]);
+  // Written down at once, before its address is known: a runtime that stops now leaves no connector nobody knows of.
+  assert.deepEqual({ ...kept.record, identity: undefined }, { kind: 'cloudflare-quick', executable: process.execPath, forwardsTo: 8789, keyId: kept.record.keyId, metrics: 'http://127.0.0.1:47011', pid: 5151, identity: undefined });
+  assert.ok(!JSON.stringify(kept.record).includes('key-of-this-start'), 'only a sign of the key is written down');
+  // The address is what cloudflared says it was given, plus the path this runtime answers under.
+  cloudflared.given = 'calm-river-quick-fixture.trycloudflare.com'; cloudflared.ready = 2;
+  await until(() => connection.publicUrl(), 'the address to be learned');
   const live = await connection.status();
-  // The address a client is given is the host the tunnel was handed plus the path this runtime answers under.
-  assert.equal(live.phase, 'connected'); assert.equal(live.publicUrl, 'https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start');
-  assert.equal(connection.publicUrl(), 'https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start');
-  await connection.stop();
-  assert.equal(connection.publicUrl(), null, 'a stopped tunnel has no address');
-  assert.equal((await connection.status()).publicUrl, undefined);
+  assert.equal(live.phase, 'connected'); assert.equal(live.edgeConnections, 2); assert.equal(live.publicUrl, 'https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start');
+  assert.ok(Date.parse(live.addressSince) > 0);
+  await until(() => kept.record?.since, 'the time of the address to be written down');
+  // Added to what was written down at the start, at once (a restart in the seconds a second asking takes kept a record
+  // without it: found with the real cloudflared).
+  assert.equal(kept.amended, 1);
+  // cloudflared writes the address a failed request went to into its log, key and all: what is shown of the log
+  // (connection.status, the doctor) has the key taken out.
+  fs.writeFileSync(path.join(temp, 'quick-tunnel.log'), 'INF started\nERR Request failed error="no answer" dest=https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start?x=1 connIndex=0\n');
+  const logged = (await connection.status()).diagnostic;
+  assert.match(logged, /dest=https:\/\/calm-river-quick-fixture\.trycloudflare\.com\/mcp\/<key>\?x=1/); assert.ok(!logged.includes('key-of-this-start'));
+  // Also where what is shown of the log begins inside an address, or inside its key, and with many lines that carry it
+  // (each one taken out shortens the text): nothing of the key is shown, wherever the end of the log falls.
+  const failed = 'ERR Request failed error="no answer" dest=https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start connIndex=0\n';
+  for (let shift = 0; shift < 128; shift++) {
+    fs.writeFileSync(path.join(temp, 'quick-tunnel.log'), 'INF started\n' + failed.repeat(90) + 'z'.repeat(shift) + '\n');
+    const shown = (await connection.status()).diagnostic;
+    // Every line shown is a whole line of the log, its key taken out: nothing of a line cut at its start.
+    const whole = failed.replace('key-of-this-start', '<key>').trimEnd();
+    assert.ok(shown.length <= 4000 && shown.split('\n').every(line => line === whole || /^z*$/.test(line)), 'with the end ' + shift + ' characters further: ' + shown.slice(0, 80));
+  }
+  // One line longer than what is shown, cut inside its key: none of it.
+  fs.writeFileSync(path.join(temp, 'quick-tunnel.log'), 'INF ' + 'x'.repeat(300) + '/mcp/key-of-this-start' + 'y'.repeat(3990));
+  assert.equal((await connection.status()).diagnostic, undefined);
+  // A restart (or a runtime that fails) leaves it running, written down; the next runtime takes it back, address and all.
+  await connection.stop({ keep: true });
+  assert.deepEqual(terminated, []); assert.equal(connection.publicUrl(), null); assert.ok(kept.record);
+  const next = connect();
+  const taken = await next.start();
+  assert.equal(spawned.length, 1, 'no second cloudflared'); assert.equal(taken.adopted, true);
+  assert.equal(next.publicUrl(), 'https://calm-river-quick-fixture.trycloudflare.com/mcp/key-of-this-start');
+  assert.equal(taken.addressSince, live.addressSince, 'its address is the one it has had since then');
+  // An explicit stop ends it, also one that was taken back.
+  await next.stop();
+  assert.equal(kept.reaped, 1); assert.equal(kept.record, null); assert.equal(next.publicUrl(), null);
+  assert.equal((await next.status()).publicUrl, undefined);
+  // And a stop of a connector this runtime started ends it as ever.
+  const third = connect(); await third.start(); await third.stop();
+  assert.deepEqual(terminated, [spawned[1].child.pid]);
+  // One that could not be written down (the system did not say who the process is) is not left running by a restart:
+  // nobody could find it again to end it.
+  kept.refused = true;
+  const fourth = connect(); await fourth.start(); await fourth.stop({ keep: true });
+  assert.deepEqual(terminated, [spawned[1].child.pid, spawned[2].child.pid]);
 });
 
+test('a kept quick tunnel that does not answer for a moment keeps its address while its process is there, and one whose process is gone is started again', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-busy-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const config = { kind: 'cloudflare-quick', executable: process.execPath };
+  const { spawned, cloudflared, spawnImpl, terminateImpl, fetchImpl, kept, owned } = quickFixture();
+  const connect = (more = {}) => createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl, fetchImpl, owned, pickPort: async () => 47011, ...more });
+  cloudflared.given = 'busy-fixture.trycloudflare.com'; cloudflared.ready = 1;
+  const first = connect(); await first.start(); await until(() => first.publicUrl(), 'the address'); await until(() => kept.record?.since, 'the record');
+  await first.stop({ keep: true });
+  const taken = connect({ lookMs: 20 }); assert.equal((await taken.start()).adopted, true);
+  // A computer under load: cloudflared answers nothing for a while, and its process is still the one written down.
+  cloudflared.answers = false;
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(spawned.length, 1, 'it is not taken for gone'); assert.equal(taken.publicUrl(), 'https://busy-fixture.trycloudflare.com/mcp/key-of-this-start');
+  // Its process is gone: it is started again.
+  kept.alive = false;
+  await until(async () => (await taken.status()).error?.code === 'cloudflared_exited', 'the end to be said');
+  await until(() => spawned.length === 2, 'a new cloudflared', 5000);
+  cloudflared.answers = true; await taken.stop();
+});
+
+test('a kept quick tunnel is taken back only where it is still the one this runtime would start, and one that lost its way is started again', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-kept-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const config = { kind: 'cloudflare-quick', executable: process.execPath };
+  const { spawned, events, cloudflared, spawnImpl, terminateImpl, fetchImpl, kept, owned } = quickFixture();
+  const connect = (localMcpUrl = 'http://127.0.0.1:8789/mcp/key-of-this-start', more = {}) => createConnection({ config, localMcpUrl, instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl, fetchImpl, owned, pickPort: async () => 47011, ...more });
+  cloudflared.given = 'first-fixture.trycloudflare.com'; cloudflared.ready = 1;
+  const first = connect(); await first.start(); await until(() => first.publicUrl(), 'the first address'); await until(() => kept.record?.since, 'the record');
+  await first.stop({ keep: true });
+  // Another port to forward to, another key (the owner asked for a new address), or a connector that is not there
+  // any more: it is not taken back; what is written down is ended, and a new one is started. (Each differs from the
+  // one kept before it in that one thing only.)
+  for (const [why, url, prepare] of [['another port', 'http://127.0.0.1:9790/mcp/key-of-this-start', () => {}], ['another key', 'http://127.0.0.1:9790/mcp/a-new-key-of-the-owner', () => {}],
+    ['gone', 'http://127.0.0.1:9790/mcp/a-new-key-of-the-owner', () => { kept.alive = false; }]]) {
+    prepare();
+    const before = spawned.length, reaped = kept.reaped, other = connect(url);
+    await other.start();
+    assert.equal(spawned.length, before + 1, why + ': a new cloudflared');
+    assert.equal(kept.reaped, reaped + 1, why + ': what was written down is ended');
+    assert.deepEqual(events.slice(-2), ['reap', 'spawn'], why + ': ended before the new one starts');
+    await until(() => other.publicUrl(), why + ': its address'); await until(() => kept.record?.since, why + ': its record');
+    await other.stop({ keep: true }); kept.alive = true;
+  }
+  // A kept connector that answers late when asked for its address (a restart, on a busy computer) is taken back: it is
+  // given a while. (The same one the last round kept: everything else about it fits.)
+  const same = 'http://127.0.0.1:9790/mcp/a-new-key-of-the-owner';
+  cloudflared.answers = false; setTimeout(() => { cloudflared.answers = true; }, 300);
+  const late = connect(same, { adoptMs: 3000 });
+  assert.equal((await late.start()).adopted, true); assert.equal(spawned.length, 4);
+  await late.stop({ keep: true });
+  // One that does not answer within that while is not taken back: what is written down is ended, and a new one started.
+  cloudflared.answers = false;
+  const reapedBefore = kept.reaped, silent = connect(same, { adoptMs: 100 }); await silent.start();
+  assert.equal(silent.publicUrl(), null); assert.equal(spawned.length, 5); assert.equal(kept.reaped, reapedBefore + 1); assert.deepEqual(events.slice(-2), ['reap', 'spawn']);
+  cloudflared.answers = true; await silent.stop();
+  // One that holds no connection to Cloudflare for the time allowed (a long time offline) is ended and started again:
+  // its address may be gone, and a new one is said as new. Only time this runtime was awake to look counts.
+  let clock = Date.now();
+  const watched = connect(undefined, { lookMs: 20, lostMs: 1000, now: () => clock });
+  await watched.start(); await until(() => watched.publicUrl(), 'the address of the watched one');
+  const before = spawned.length;
+  cloudflared.ready = 0; clock += 500;
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(spawned.length, before, 'a moment without a connection is no loss');
+  // The computer slept: between two looks the clock went on far more than a look takes. That time is not counted.
+  clock += 5000;
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(spawned.length, before, 'a sleep is no loss'); assert.equal((await watched.status()).error, undefined);
+  // Awake and looking all along: lost. Said as lost (until the new one starts, a second later), then started again.
+  const ticking = setInterval(() => { clock += 10; }, 10);
+  try { await until(async () => (await watched.status()).error?.code === 'tunnel_lost', 'the loss to be said', 8000); } finally { clearInterval(ticking); }
+  assert.equal(watched.publicUrl(), null, 'a lost tunnel has no address');
+  await until(() => spawned.length === before + 1, 'a new cloudflared after the tunnel was lost', 5000);
+  cloudflared.ready = 1;
+  await watched.stop();
+});
+
+test('a quick tunnel that does not answer at all for the time allowed is stuck, and started again; one the system cannot say anything about is left as it is', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-stuck-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const config = { kind: 'cloudflare-quick', executable: process.execPath };
+  const { spawned, events, cloudflared, spawnImpl, terminateImpl, terminated, fetchImpl, kept, owned } = quickFixture();
+  const connect = (more = {}) => createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl, fetchImpl, owned, pickPort: async () => 47011, ...more });
+  cloudflared.given = 'stuck-fixture.trycloudflare.com'; cloudflared.ready = 1;
+  let clock = Date.now();
+  // (A connector of another connection that a killed runtime left behind is ended before a quick tunnel starts.)
+  const leftovers = [], leftover = { async reap() { leftovers.push('reap'); return { reaped: true }; } };
+  const stuck = connect({ lookMs: 20, lostMs: 300, now: () => clock, leftover });
+  await stuck.start(); await until(() => stuck.publicUrl(), 'the address'); assert.deepEqual(leftovers, ['reap']);
+  // Its log, which it writes for as long as it runs, is put aside past its size.
+  const log = path.join(temp, 'quick-tunnel.log');
+  fs.writeFileSync(log, 'a line of the log\n'.repeat(70000));
+  await until(() => fs.statSync(log).size === 0, 'the log to be put aside');
+  assert.equal(fs.statSync(log + '.1').size, 'a line of the log\n'.length * 70000);
+  cloudflared.answers = false;
+  const ticking = setInterval(() => { clock += 10; }, 10);
+  try { await until(async () => (await stuck.status()).error?.code === 'tunnel_stuck', 'it to be said stuck', 8000); } finally { clearInterval(ticking); }
+  assert.deepEqual(terminated, [spawned[0].child.pid]);
+  cloudflared.answers = true; await until(() => spawned.length === 2, 'a new cloudflared', 5000); await stuck.stop();
+  // Where the system cannot say whether the process written down is still the one (asking it took too long), it is
+  // neither taken back, nor ended, nor forgotten, and no second tunnel is started beside it.
+  kept.record = { kind: 'cloudflare-quick', pid: 77, identity: 'cloudflared|77' };
+  const unknown = Object.assign(new Error('The system could not say'), { code: 'identity_unknown' });
+  const asked = { ...owned, async adopt() { throw unknown; }, async reap() { throw unknown; } };
+  const before = [spawned.length, events.length];
+  await assert.rejects(createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl, fetchImpl, owned: asked, pickPort: async () => 47011 }).start(), { code: 'identity_unknown' });
+  assert.deepEqual([spawned.length, events.length], before); assert.equal(kept.record.pid, 77);
+  // Nor does a stop say it ended a tunnel it could not end: it says so, as it does for one it had taken back.
+  await assert.rejects(createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl, fetchImpl, owned: asked, pickPort: async () => 47011 }).stop(),
+    { code: 'shutdown_unconfirmed', message: /was not ended: The system could not say/ });
+  assert.equal(kept.record.pid, 77);
+});
+
+test('a host name is taken only where cloudflared itself said it was given it, and a tunnel is taken back only under the host name written down', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-host-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const config = { kind: 'cloudflare-quick', executable: process.execPath };
+  const { spawned, cloudflared, spawnImpl, terminateImpl, fetchImpl, kept, owned } = quickFixture();
+  const watched = [], keeper = pid => watched.push(pid);
+  const connect = (more = {}) => createConnection({ config, localMcpUrl: 'http://127.0.0.1:8789/mcp/key-of-this-start', instanceRoot: temp, env: { PATH: 'x' }, spawnImpl, terminateImpl, fetchImpl, owned, pickPort: async () => 47011, adoptMs: 300, keeper, ...more });
+  // A program that took the metrics port first answers with a host name of its own: cloudflared said nothing of it.
+  cloudflared.given = 'not-the-tunnels.trycloudflare.com'; cloudflared.ready = 1; cloudflared.logs = false;
+  const first = connect(); await first.start();
+  // Written down, it is watched by a keeper of its own from the start (./platform/tunnel-keeper.mjs).
+  assert.deepEqual(watched, [spawned[0].child.pid]);
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  assert.equal(first.publicUrl(), null, 'no address, so no key is sent anywhere');
+  // What cloudflared says in its own log is taken, and written down with the tunnel (the key is not).
+  cloudflared.given = 'calm-host-fixture.trycloudflare.com'; cloudflared.logs = true;
+  await until(() => first.publicUrl(), 'the address', 5000); await until(() => kept.record?.hostname, 'the host name written down');
+  assert.equal(kept.record.hostname, 'calm-host-fixture.trycloudflare.com'); assert.ok(!JSON.stringify(kept.record).includes('key-of-this-start'));
+  await first.stop({ keep: true });
+  // Taken back where it answers with that host name; not where something else answers there.
+  cloudflared.given = 'someone-elses.trycloudflare.com';
+  const other = connect(); await other.start();
+  assert.notEqual(other.publicUrl(), 'https://someone-elses.trycloudflare.com/mcp/key-of-this-start'); assert.equal(spawned.length, 2, 'a new tunnel instead');
+  await other.stop();
+  // The key is made anew only where there is none: one that cannot be read this moment is an error, not a new address.
+  const keyless = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-keyfile-')); t.after(() => fs.rmSync(keyless, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(keyless, 'quick-tunnel.key'));
+  assert.throws(() => quickTunnelKey(keyless), { code: 'EISDIR' });
+});
 test('the ingress answers a quick tunnel only under the address the tunnel holds right now', async t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-ingress-'));
   const instanceRoot = path.join(temp, 'instance'); fs.mkdirSync(instanceRoot);
   fs.writeFileSync(path.join(instanceRoot, 'config.json'), JSON.stringify({ connection: { kind: 'cloudflare-quick', executable: process.execPath } }));
+  // Claude Code has DevMate among its servers, added with a Node that is gone since: the doctor says so. (Where the
+  // clients keep their settings is a folder of this test.)
+  // (On macOS the home holds Claude Desktop's settings and the runtime's socket, whose path may be no longer than 104
+  // bytes: a short folder there.)
+  const places = ['APPDATA', 'LOCALAPPDATA', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', ...(process.platform === 'darwin' ? ['HOME'] : [])], before = Object.fromEntries(places.map(name => [name, process.env[name]]));
+  const home = process.platform === 'darwin' ? fs.mkdtempSync('/tmp/devmate-home-') : temp;
+  for (const name of places) process.env[name] = name === 'HOME' ? home : temp;
+  fs.writeFileSync(path.join(temp, '.claude.json'), JSON.stringify({ mcpServers: { devmate: { command: path.join(temp, 'gone', 'node.exe'), args: [path.join(instanceRoot, 'clients', 'devmate-mcp.mjs')] } } }));
   let address = null, keyPath = null;
+  const since = '2026-10-31T00:00:00.000Z';
   const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: ({ localMcpUrl }) => { keyPath = new URL(localMcpUrl).pathname; return { async start() {}, async stop() {}, publicUrl: () => address,
-    status() { return { kind: 'cloudflare-quick', phase: address ? 'connected' : 'connecting', ...(address ? { publicUrl: address } : {}), remoteMcpVerified: false }; } }; } });
-  t.after(async () => { await runtime.stop(); fs.rmSync(temp, { recursive: true, force: true }); });
+    status() { return { kind: 'cloudflare-quick', phase: address ? 'connected' : 'connecting', ...(address ? { publicUrl: address, addressSince: since, adopted: true } : {}), remoteMcpVerified: false }; } }; } });
+  t.after(async () => { await runtime.stop(); for (const name of places) if (before[name] === undefined) delete process.env[name]; else process.env[name] = before[name]; fs.rmSync(temp, { recursive: true, force: true }); fs.rmSync(home, { recursive: true, force: true }); });
   assert.ok(runtime.ingressPort, 'the ingress listens before the address is known');
   // The host name of a quick tunnel is visible to anyone who watches DNS. What opens the endpoint is the rest of the address.
   assert.match(keyPath, /^\/mcp\/[A-Za-z0-9_-]{32}$/);
@@ -227,10 +454,83 @@ test('the ingress answers a quick tunnel only under the address the tunnel holds
   assert.equal(runtime.service.publicUrl(), address);
   const doctor = await runtime.service.call('runtime.doctor', {}, { id: 'owner', surface: 'local' });
   const named = id => doctor.checks.find(item => item.id === id);
-  assert.equal(named('connection.address').status, 'info'); assert.match(named('connection.address').detail, /changes whenever/); assert.match(named('connection.address').detail, /no event streams/);
+  assert.equal(named('connection.address').status, 'info'); assert.match(named('connection.address').detail, /stays across restarts and updates of DevMate/); assert.match(named('connection.address').detail, /no event streams/);
+  // Since when the address has stayed the same, and that it was kept from before a restart.
+  assert.match(named('connection.address').detail, /Its address has stayed the same since 2026-10-31T00:00:00\.000Z, kept from before the last restart of DevMate\./);
+  assert.equal(named('clients').status, 'warn'); assert.match(named('clients').detail, /DevMate was added to claude-code, but what starts it there is gone/); assert.match(named('clients').fix, /devmate client add claude-code/);
+  assert.match(named('security').fix, /devmate connect quick --new-address/);
   assert.match(named('security').detail, /quick tunnel has no sign-in/); assert.doesNotMatch(named('security').fix, /oauth/);
   // What the doctor prints is pasted into bug reports: it names the host and never the key.
   assert.ok(!JSON.stringify(doctor).includes(keyPath.split('/')[2]));
+});
+
+test('the key in a quick tunnel\'s address is made once and kept by the instance, until the owner asks for a new address', async t => {
+  // It was new with every start, so the address changed with every restart even where the tunnel could have stayed.
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-key-'));
+  const instanceRoot = path.join(temp, 'instance'); fs.mkdirSync(instanceRoot);
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(instanceRoot, 'config.json'), JSON.stringify({ connection: { kind: 'cloudflare-quick', executable: process.execPath } }));
+  const paths = [], stops = [];
+  for (const round of [1, 2, 3]) {
+    if (round === 3) forgetQuickTunnelKey(instanceRoot);
+    const runtime = await startRuntime({ instanceRoot, port: 0, connectionFactory: ({ localMcpUrl }) => { paths.push(new URL(localMcpUrl).pathname);
+      return { async start() {}, async stop(options) { stops.push(options); }, publicUrl: () => null, status() { return { kind: 'cloudflare-quick', phase: 'connecting', remoteMcpVerified: false }; } }; } });
+    await runtime.stop();
+  }
+  assert.match(paths[0], /^\/mcp\/[A-Za-z0-9_-]{32}$/);
+  assert.equal(paths[1], paths[0], 'the same key at the next start');
+  assert.notEqual(paths[2], paths[1], 'a new key once the owner asked for one');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(instanceRoot, 'quick-tunnel.key')).mode & 0o777, 0o600);
+  // A stop is a stop: the connection is told to end its connector. Only a stop to start again, said beside the
+  // instance by whoever asks for it, keeps it.
+  assert.deepEqual(stops, [{ keep: false }, { keep: false }, { keep: false }]);
+  const again = await startRuntime({ instanceRoot, port: 0, connectionFactory: () => ({ async start() {}, async stop(options) { stops.push(options); }, publicUrl: () => null, status() { return { kind: 'cloudflare-quick', phase: 'connecting', remoteMcpVerified: false }; } }) });
+  fs.writeFileSync(path.join(instanceRoot, 'restarting'), '');
+  await again.stop();
+  assert.deepEqual(stops.at(-1), { keep: true });
+  assert.equal(fs.existsSync(path.join(instanceRoot, 'restarting')), false);
+  const fake = () => ({ async start() {}, async stop(options) { stops.push(options); }, publicUrl: () => null, status() { return { kind: 'cloudflare-quick', phase: 'connecting', remoteMcpVerified: false }; } });
+  // A runtime that fails ends it: until another runtime is started, which may be much later, a tunnel kept then would
+  // forward the public address, key and all, to a port nobody holds.
+  const failing = await startRuntime({ instanceRoot, port: 0, connectionFactory: fake });
+  await failing.stop({}, { crashed: true });
+  assert.deepEqual(stops.at(-1), { keep: false });
+  // A word left from before this runtime started is no word for its stop, nor is one too old to be this stop's.
+  fs.writeFileSync(path.join(instanceRoot, 'restarting'), '');
+  const later = await startRuntime({ instanceRoot, port: 0, connectionFactory: fake });
+  assert.equal(fs.existsSync(path.join(instanceRoot, 'restarting')), false, 'taken away when this runtime started');
+  fs.writeFileSync(path.join(instanceRoot, 'restarting'), ''); const old = new Date(Date.now() - 180000); fs.utimesSync(path.join(instanceRoot, 'restarting'), old, old);
+  await later.stop();
+  assert.deepEqual(stops.at(-1), { keep: false });
+});
+
+test('a runtime comes in by the port a kept quick tunnel forwards to, and ends a kept tunnel that belongs to another connection', async t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'devmate-quick-port-'));
+  const instanceRoot = path.join(temp, 'instance'); fs.mkdirSync(instanceRoot);
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const free = () => new Promise(resolve => { const server = http.createServer(); server.listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)); }); });
+  const fake = kind => () => ({ async start() {}, async stop() {}, publicUrl: () => null, status() { return { kind, phase: 'connecting', remoteMcpVerified: false }; } });
+  // The tunnel forwards to the port the runtime before came in by: this one takes that port again, where it is free.
+  const forwardsTo = await free();
+  fs.writeFileSync(path.join(instanceRoot, 'config.json'), JSON.stringify({ connection: { kind: 'cloudflare-quick', executable: process.execPath } }));
+  fs.writeFileSync(path.join(instanceRoot, 'quick-tunnel.json'), JSON.stringify({ kind: 'cloudflare-quick', forwardsTo, pid: 1, identity: 'nobody|0' }));
+  const quick = await startRuntime({ instanceRoot, port: 0, connectionFactory: fake('cloudflare-quick') });
+  try { assert.equal(quick.ingressPort, forwardsTo); } finally { await quick.stop(); }
+  // Another connection now: a quick tunnel left running for this instance is ended before it starts.
+  const { spawn } = await import('node:child_process');
+  const left = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore', windowsHide: true });
+  t.after(() => { try { left.kill('SIGKILL'); } catch {} });
+  await new Promise((resolve, reject) => { left.once('spawn', resolve); left.once('error', reject); });
+  const { ownedProcess } = await import('../runtime/platform/owned-process.mjs');
+  await ownedProcess(path.join(instanceRoot, 'quick-tunnel.json')).remember(left.pid, { kind: 'cloudflare-quick', forwardsTo });
+  const ended = new Promise(resolve => left.once('exit', () => resolve(true)));
+  fs.writeFileSync(path.join(instanceRoot, 'config.json'), JSON.stringify({ connection: { kind: 'local' } }));
+  const local = await startRuntime({ instanceRoot, port: 0, connectionFactory: fake('local') });
+  try {
+    let timer;
+    assert.equal(await Promise.race([ended, new Promise(resolve => { timer = setTimeout(() => resolve(false), 10000); })]).finally(() => clearTimeout(timer)), true, 'the kept tunnel was ended');
+    assert.equal(fs.existsSync(path.join(instanceRoot, 'quick-tunnel.json')), false);
+  } finally { await local.stop(); }
 });
 
 test('through a quick tunnel every answer is one JSON body, also for a call that reports progress while it runs', async t => {
@@ -268,6 +568,17 @@ test('through a quick tunnel every answer is one JSON body, also for a call that
     assert.ok(seen.length >= 3 && seen.every(entry => !entry.includes('event-stream')), mode + ': ' + seen.join(', '));
     assert.ok(seen.some(entry => entry === 'POST 200 application/json'), mode + ': ' + seen.join(', '));
   }
+  // A client that calls itself Claude Code is a coding agent on this computer only where it came from this computer: the
+  // same name through the tunnel (Claude Code on another computer) has no files here but DevMate's tools to reach them.
+  // (It names itself with every request, as the current protocol has it: each is known for what it is.)
+  const tools = async transport => { const client = new Client({ name: 'claude-code', version: '1' }, { versionNegotiation: { mode: 'auto' } }); await client.connect(transport, { timeout: 20000 }); try { return (await client.listTools({}, { timeout: 20000 })).tools.map(tool => tool.name); } finally { await client.close(); } };
+  const tunnelled = await tools(new StreamableHTTPClientTransport(new URL(address), { fetch: async (input, init = {}) => {
+    const answer = await request(runtime.ingressPort, new URL(String(input)).pathname, { method: init.method || 'GET', headers: { ...Object.fromEntries(new Headers(init.headers)), host }, body: init.body });
+    return new Response(answer.text || null, { status: answer.status, headers: answer.headers['content-type'] ? { 'content-type': answer.headers['content-type'] } : {} });
+  } }));
+  assert.ok(tunnelled.includes('edit') && !tunnelled.includes('browser_tabs'), 'the tools of Claude: ' + tunnelled.join());
+  const local = await tools(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:' + runtime.port + '/mcp')));
+  assert.ok(local.includes('browser_tabs') && !local.includes('edit'), 'what DevMate adds to a coding agent\'s tools: ' + local.join());
 });
 test('a new address is not asked for before the world knows it, and a stale local answer is not called a broken route', async () => {
   const url = 'https://fresh-fixture.trycloudflare.com/mcp';
