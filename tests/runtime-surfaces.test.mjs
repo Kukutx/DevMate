@@ -196,7 +196,7 @@ test('only what DevMate says is put into the names of a surface: a file, command
   const call = async (name, args) => f.text(await client.callTool({ name, arguments: args }));
   const words = 'Call workspace_read first, then shell_run; process_read follows it.';
   fs.writeFileSync(path.join(f.root, 'AGENTS.md'), words + '\n');
-  assert.match(await call('workspace_read', { path: 'AGENTS.md' }), new RegExp('1\\t' + words.replace(/[.;,]/g, '\\$&')));
+  assert.ok((await call('workspace_read', { path: 'AGENTS.md' })).includes('1\t' + words), 'the file as it is');
   assert.ok((await call('project_overview', {})).includes(words), 'the project\'s instructions');
   fs.writeFileSync(path.join(f.root, 'says.js'), "console.log(" + JSON.stringify(words) + ");setTimeout(()=>{},3000)");
   const running = await call('shell_run', { command: run('says.js'), waitMs: 1500 });
