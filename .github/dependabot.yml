@@ -2,6 +2,8 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: /
+    # Work lands on develop and reaches main with a release; an update proposed against main would skip it.
+    target-branch: develop
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -16,6 +18,8 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    # Work lands on develop and reaches main with a release; an update proposed against main would skip it.
+    target-branch: develop
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
